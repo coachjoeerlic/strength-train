@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
+import { AuthError } from '@supabase/supabase-js';
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('');
@@ -41,11 +42,12 @@ export default function RegisterPage() {
         });
         // Don't redirect immediately - wait for email confirmation
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Registration error details:', error);
+      const authError = error as AuthError;
       setMessage({ 
         type: 'error', 
-        text: error.message || 'An error occurred during registration. Please try again.' 
+        text: authError.message || 'An error occurred during registration. Please try again.' 
       });
     } finally {
       setLoading(false);

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
+import { AuthError } from '@supabase/supabase-js';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -36,8 +37,9 @@ export default function LoginPage() {
 
       if (error) throw error;
       router.push('/profile');
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message });
+    } catch (error) {
+      const authError = error as AuthError;
+      setMessage({ type: 'error', text: authError.message });
     } finally {
       setLoading(false);
     }
@@ -55,8 +57,9 @@ export default function LoginPage() {
 
       if (error) throw error;
       setMessage({ type: 'success', text: 'Check your email for the password reset link' });
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message });
+    } catch (error) {
+      const authError = error as AuthError;
+      setMessage({ type: 'error', text: authError.message });
     } finally {
       setLoading(false);
     }

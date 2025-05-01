@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/AuthContext';
@@ -24,20 +24,14 @@ export default function ProfilePage() {
     bio: '',
   });
 
-  useEffect(() => {
-    if (!user) {
-      router.push('/login');
-      return;
-    }
-    fetchProfile();
-  }, [user]);
-
-  const fetchProfile = async () => {
+  const fetchProfile = useCallback(async () => {
+    if (!user) return;
+    
     try {
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', user?.id)
+        .eq('id', user.id)
         .single();
 
       if (error) throw error;
@@ -51,9 +45,19 @@ export default function ProfilePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    fetchProfile();
+  }, [user, router, fetchProfile]);
 
   const handleSave = async () => {
+    if (!user) return;
+    
     try {
       const { error } = await supabase
         .from('profiles')
@@ -61,7 +65,7 @@ export default function ProfilePage() {
           username: editForm.username,
           bio: editForm.bio,
         })
-        .eq('id', user?.id);
+        .eq('id', user.id);
 
       if (error) throw error;
       await fetchProfile();
