@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { AuthError } from '@supabase/supabase-js';
@@ -12,17 +12,18 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
-    const error = searchParams.get('error');
+    // Check for error in URL
+    const params = new URLSearchParams(window.location.search);
+    const error = params.get('error');
     if (error === 'auth_callback_failed') {
       setMessage({ 
         type: 'error', 
         text: 'Authentication failed. Please try logging in again.' 
       });
     }
-  }, [searchParams]);
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,33 +36,38 @@ export default function LoginPage() {
         password,
       });
 
-      if (error) throw error;
-      router.push('/profile');
+      if (error) {
+        const authError = error as AuthError;
+        setMessage({ type: 'error', text: authError.message });
+      } else {
+        router.push('/profile');
+      }
     } catch (error) {
-      const authError = error as AuthError;
-      setMessage({ type: 'error', text: authError.message });
+      setMessage({ type: 'error', text: 'An unexpected error occurred' });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleResetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setMessage(null);
+  const handleResetPassword = async () => {
+    if (!email) {
+      setMessage({ type: 'error', text: 'Please enter your email address' });
+      return;
+    }
 
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${window.location.origin}/reset-password`,
       });
 
-      if (error) throw error;
-      setMessage({ type: 'success', text: 'Check your email for the password reset link' });
+      if (error) {
+        const authError = error as AuthError;
+        setMessage({ type: 'error', text: authError.message });
+      } else {
+        setMessage({ type: 'success', text: 'Password reset instructions sent to your email' });
+      }
     } catch (error) {
-      const authError = error as AuthError;
-      setMessage({ type: 'error', text: authError.message });
-    } finally {
-      setLoading(false);
+      setMessage({ type: 'error', text: 'An unexpected error occurred' });
     }
   };
 

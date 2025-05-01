@@ -23,13 +23,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Check active sessions and sets the user
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
-        if (sessionError) throw sessionError;
+        if (sessionError) {
+          console.error('Session error:', sessionError);
+          setError('Failed to get session');
+          setLoading(false);
+          return;
+        }
         
         setUser(session?.user ?? null);
         setLoading(false);
 
         // Listen for changes on auth state
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+          console.log('Auth state changed:', event, session?.user?.id);
           setUser(session?.user ?? null);
           setLoading(false);
         });

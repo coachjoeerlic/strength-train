@@ -29,7 +29,7 @@ export default function HomePage() {
   }, [user, loading, router]);
 
   if (error) {
-    return (
+  return (
       <main className="min-h-screen flex items-center justify-center p-4">
         <div className="text-red-500 text-center">
           <p className="mb-4">{error}</p>

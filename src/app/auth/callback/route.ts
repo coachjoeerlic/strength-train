@@ -2,9 +2,12 @@ import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
+  const requestUrl = new URL(request.url);
+  
   try {
-    const requestUrl = new URL(request.url);
     const code = requestUrl.searchParams.get('code');
 
     if (code) {
@@ -16,14 +19,18 @@ export async function GET(request: Request) {
       
       if (error) {
         console.error('Auth callback error:', error);
-        return NextResponse.redirect(new URL('/login?error=auth_callback_failed', request.url));
+        return NextResponse.redirect(
+          `${requestUrl.origin}/login?error=${encodeURIComponent(error.message)}`
+        );
       }
     }
 
     // URL to redirect to after sign in process completes
-    return NextResponse.redirect(new URL('/profile', request.url));
+    return NextResponse.redirect(`${requestUrl.origin}/profile`);
   } catch (error) {
     console.error('Auth callback error:', error);
-    return NextResponse.redirect(new URL('/login?error=auth_callback_failed', request.url));
+    return NextResponse.redirect(
+      `${requestUrl.origin}/login?error=${encodeURIComponent('An unexpected error occurred')}`
+    );
   }
 } 

@@ -48,12 +48,14 @@ export default function ProfilePage() {
   }, [user]);
 
   useEffect(() => {
-    if (!user) {
+    if (!loading && !user) {
       router.push('/login');
       return;
     }
-    fetchProfile();
-  }, [user, router, fetchProfile]);
+    if (user) {
+      fetchProfile();
+    }
+  }, [user, loading, router, fetchProfile]);
 
   const handleSave = async () => {
     if (!user) return;
