@@ -13,6 +13,8 @@ type Message = {
   user_id: string;
   created_at: string;
   status: 'sending' | 'sent' | 'failed';
+  media_url?: string;
+  media_type?: 'image' | 'video' | 'gif';
 };
 
 export default function ChatPage({ params }: { params: { chatId: string } }) {
@@ -123,7 +125,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = async (content: string) => {
+  const sendMessage = async (content: string, mediaUrl?: string, mediaType?: 'image' | 'video' | 'gif') => {
     if (!user) return;
 
     // Create optimistic message
@@ -133,6 +135,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       user_id: user.id,
       created_at: new Date().toISOString(),
       status: 'sending',
+      media_url: mediaUrl,
+      media_type: mediaType,
     };
 
     // Add optimistic message to state
@@ -144,6 +148,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         chat_id: params.chatId,
         content,
         user_id: user.id,
+        media_url: mediaUrl,
+        media_type: mediaType,
       }).select().single();
 
       if (error) throw error;
@@ -223,7 +229,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         </div>
       </div>
       <div className="p-4 border-t">
-        <MessageInput onSend={sendMessage} />
+        <MessageInput onSend={sendMessage} chatId={params.chatId} />
       </div>
     </main>
   );
