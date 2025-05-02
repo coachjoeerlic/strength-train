@@ -7,6 +7,7 @@ import MessageBubble from '@/components/MessageBubble';
 import MessageInput from '@/components/MessageInput';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { Message } from '@/types/message';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
 export default function ChatPage({ params }: { params: { chatId: string } }) {
   const { user } = useAuth();
@@ -120,7 +121,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     const channel = supabase
       .channel(`chat:${params.chatId}`)
       .on(
-        'postgres_changes',
+        'postgres_changes' as any,
         {
           event: '*',
           schema: 'public',
