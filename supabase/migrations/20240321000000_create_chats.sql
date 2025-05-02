@@ -183,9 +183,5 @@ create policy "Users can update their own profile"
     id = auth.uid()
   );
 
--- Add a policy to prevent users from accessing other users' profiles
-create policy "Users can only view their own profile"
-  on profiles for select
-  using (
-    id = auth.uid()
-  ); 
+-- Remove the restrictive policy
+drop policy if exists "Users can only view their own profile" on profiles; 

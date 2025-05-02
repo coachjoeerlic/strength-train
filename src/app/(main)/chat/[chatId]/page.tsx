@@ -6,16 +6,7 @@ import { supabase } from '@/lib/supabaseClient';
 import MessageBubble from '@/components/MessageBubble';
 import MessageInput from '@/components/MessageInput';
 import { RealtimeChannel } from '@supabase/supabase-js';
-
-type Message = {
-  id: string;
-  content: string;
-  user_id: string;
-  created_at: string;
-  status: 'sending' | 'sent' | 'failed';
-  media_url?: string;
-  media_type?: 'image' | 'video' | 'gif';
-};
+import { Message } from '@/types/message';
 
 export default function ChatPage({ params }: { params: { chatId: string } }) {
   const { user } = useAuth();
@@ -23,6 +14,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const retryCountRef = useRef(0);
@@ -33,12 +25,76 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       try {
         const { data, error } = await supabase
           .from('messages')
-          .select('*')
+          .select(`
+            *,
+            reply_to:messages!reply_to_message_id (
+              content,
+              user_id,
+              media_url,
+              media_type
+            )
+          `)
           .eq('chat_id', params.chatId)
           .order('created_at', { ascending: true });
 
         if (error) throw error;
-        setMessages(data || []);
+        console.log('Fetched messages:', data);
+
+        // Get all user IDs from messages and replies
+        const userIds = new Set([
+          ...data.map(m => m.user_id),
+          ...data.filter(m => m.reply_to).map(m => m.reply_to.user_id)
+        ].filter(Boolean));
+        console.log('User IDs to fetch:', Array.from(userIds));
+
+        // Fetch profiles for all users
+        const { data: profilesData, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .in('id', Array.from(userIds));
+
+        if (profilesError) throw profilesError;
+        console.log('Fetched profiles:', JSON.stringify(profilesData, null, 2));
+
+        // Create a map of user IDs to profiles
+        const profilesMap = new Map(
+          profilesData.map(profile => [profile.id, profile])
+        );
+        console.log('Profiles map:', JSON.stringify(Object.fromEntries(profilesMap), null, 2));
+
+        // Transform the data to include profiles, with fallback for missing reply_to
+        const transformedData = await Promise.all(data.map(async (message) => {
+          let replyTo = undefined;
+          if (message.reply_to && Object.keys(message.reply_to).length > 0) {
+            // Normal case: reply_to is populated
+            replyTo = {
+              ...message.reply_to,
+              profiles: profilesMap.get(message.reply_to.user_id)
+            };
+          } else if (message.reply_to_message_id) {
+            // Fallback: fetch the replied-to message and its profile
+            const { data: replyMsg } = await supabase
+              .from('messages')
+              .select('content, user_id, media_url, media_type')
+              .eq('id', message.reply_to_message_id)
+              .single();
+            if (replyMsg) {
+              replyTo = {
+                ...replyMsg,
+                profiles: profilesMap.get(replyMsg.user_id)
+              };
+            }
+          }
+          const transformed = {
+            ...message,
+            profiles: profilesMap.get(message.user_id),
+            reply_to: replyTo
+          };
+          console.log('Transformed message:', JSON.stringify(transformed, null, 2));
+          return transformed;
+        }));
+
+        setMessages(transformedData);
       } catch (err) {
         setError('Failed to load messages');
         console.error('Error fetching messages:', err);
@@ -71,25 +127,126 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           table: 'messages',
           filter: `chat_id=eq.${params.chatId}`,
         },
-        (payload) => {
+        async (payload: { 
+          eventType: string; 
+          new: {
+            id: string;
+            chat_id: string;
+            content: string;
+            created_at: string;
+            user_id: string;
+            media_url?: string;
+            media_type?: 'image' | 'video' | 'gif';
+            reply_to_message_id?: string;
+            is_read: boolean;
+          }
+        }) => {
           console.log('Received realtime update:', payload);
-          console.log('Current messages:', messages);
           
           if (payload.eventType === 'INSERT') {
-            const newMessage = payload.new as Message;
+            const newMessage = payload.new;
             console.log('Processing new message:', newMessage);
+
+            // Get the reply message data if it exists
+            let replyToData = undefined;
+            if (newMessage.reply_to_message_id) {
+              // Fetch the replied-to message
+              const { data: replyData } = await supabase
+                .from('messages')
+                .select('content, user_id, media_url, media_type')
+                .eq('id', newMessage.reply_to_message_id)
+                .single();
+
+              if (replyData) {
+                // Fetch the profile for the replied-to message
+                const { data: replyProfile } = await supabase
+                  .from('profiles')
+                  .select('id, username')
+                  .eq('id', replyData.user_id)
+                  .single();
+                replyToData = {
+                  ...replyData,
+                  profiles: replyProfile
+                };
+              }
+            }
+
+            // Get all user IDs from the message and reply
+            const userIds = [newMessage.user_id];
+            if (replyToData?.user_id) {
+              userIds.push(replyToData.user_id);
+            }
+
+            // Fetch profiles for all users
+            const { data: profilesData, error: profilesError } = await supabase
+              .from('profiles')
+              .select('id, username')
+              .in('id', userIds);
+
+            if (profilesError) {
+              console.error('Error fetching profiles:', profilesError);
+              return;
+            }
+
+            // Create a map of user IDs to profiles
+            const profilesMap = new Map(
+              profilesData.map(profile => [profile.id, profile])
+            );
+
+            // Transform the message to include profiles
+            console.log('Real-time handler replyToData:', replyToData);
+            let replyToProp = {};
+            if (
+              replyToData &&
+              typeof replyToData === 'object' &&
+              Object.keys(replyToData).length > 0 &&
+              replyToData.user_id &&
+              newMessage.reply_to_message_id &&
+              (replyToData.content || replyToData.media_url)
+            ) {
+              replyToProp = {
+                reply_to: {
+                  ...replyToData,
+                  profiles: profilesMap.get(replyToData.user_id) || (replyToData.profiles ?? undefined)
+                }
+              };
+            }
+            const transformedMessage: Message = {
+              ...newMessage,
+              status: 'sent',
+              profiles: profilesMap.get(newMessage.user_id),
+              ...replyToProp
+            };
+
             setMessages((current) => {
               // Check if message already exists
               const exists = current.some(msg => msg.id === newMessage.id);
-              console.log('Message exists:', exists);
-              if (exists) return current;
-              
+              if (exists) {
+                // If the optimistic message had a reply_to and the real-time message does not, merge it in
+                return current.map(msg => {
+                  if (msg.id === newMessage.id) {
+                    // Preserve the existing reply_to data if it exists and the new message doesn't have it
+                    if (!transformedMessage.reply_to && msg.reply_to) {
+                      return { ...transformedMessage, reply_to: msg.reply_to };
+                    }
+                    // If both have reply_to data, prefer the existing one if it's more complete
+                    if (transformedMessage.reply_to && msg.reply_to) {
+                      const existingReplyTo = msg.reply_to;
+                      const newReplyTo = transformedMessage.reply_to;
+                      // Keep the existing reply_to if it has more complete data
+                      if (existingReplyTo.profiles && (!newReplyTo.profiles || Object.keys(existingReplyTo.profiles).length > Object.keys(newReplyTo.profiles).length)) {
+                        return { ...transformedMessage, reply_to: existingReplyTo };
+                      }
+                    }
+                    return transformedMessage;
+                  }
+                  return msg;
+                });
+              }
               // Add new message and sort by created_at
-              const updated = [...current, newMessage].sort(
+              return [...current, transformedMessage].sort(
                 (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
               );
-              console.log('Updated messages:', updated);
-              return updated;
             });
           }
         }
@@ -129,6 +286,20 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     if (!user) return;
 
     // Create optimistic message
+    let replyToProfiles = replyingTo?.profiles;
+    if (replyingTo && !replyToProfiles) {
+      // Try to find the profile from the messages state
+      const foundProfile = messages.find(m => m.user_id === replyingTo.user_id)?.profiles;
+      if (foundProfile) {
+        replyToProfiles = foundProfile;
+      } else if (replyingTo.user_id === user.id) {
+        // If replying to self, use current user's info
+        replyToProfiles = { username: currentUserProfile?.username || user.email || 'Me' };
+      } else {
+        // Fallback to email or placeholder
+        replyToProfiles = { username: 'Unknown user' };
+      }
+    }
     const optimisticMessage: Message = {
       id: crypto.randomUUID(),
       content,
@@ -137,6 +308,16 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       status: 'sending',
       media_url: mediaUrl,
       media_type: mediaType,
+      reply_to_message_id: replyingTo?.id,
+      reply_to: replyingTo
+        ? {
+            content: replyingTo.content,
+            user_id: replyingTo.user_id,
+            media_url: replyingTo.media_url,
+            media_type: replyingTo.media_type,
+            profiles: replyToProfiles
+          }
+        : undefined,
     };
 
     // Add optimistic message to state
@@ -150,16 +331,56 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         user_id: user.id,
         media_url: mediaUrl,
         media_type: mediaType,
-      }).select().single();
+        reply_to_message_id: replyingTo?.id,
+      }).select(`
+        *,
+        reply_to:messages!reply_to_message_id (
+          content,
+          user_id,
+          media_url,
+          media_type
+        )
+      `).single();
 
       if (error) throw error;
+
+      // Get profiles for the message and reply
+      const userIds = [data.user_id];
+      if (data.reply_to?.user_id) {
+        userIds.push(data.reply_to.user_id);
+      }
+
+      const { data: profilesData, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, username')
+        .in('id', userIds);
+
+      if (profilesError) throw profilesError;
+
+      // Create a map of user IDs to profiles
+      const profilesMap = new Map(
+        profilesData.map(profile => [profile.id, profile])
+      );
+
+      // Transform the data to include profiles
+      const transformedData = {
+        ...data,
+        profiles: profilesMap.get(data.user_id),
+        reply_to: data.reply_to ? {
+          ...data.reply_to,
+          profiles: profilesMap.get(data.reply_to.user_id)
+        } : undefined
+      };
 
       // Update optimistic message with the real message
       setMessages((current) =>
         current.map((msg) =>
-          msg.id === optimisticMessage.id ? { ...data, status: 'sent' } : msg
+          msg.id === optimisticMessage.id ? { ...transformedData, status: 'sent' } : msg
         )
       );
+
+      // Clear reply state
+      setReplyingTo(null);
     } catch (err) {
       console.error('Error sending message:', err);
       // Update optimistic message status to failed
@@ -168,6 +389,22 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           msg.id === optimisticMessage.id ? { ...msg, status: 'failed' } : msg
         )
       );
+    }
+  };
+
+  const handleReply = (message: Message) => {
+    setReplyingTo(message);
+  };
+
+  const handleScrollToMessage = (messageId: string) => {
+    const element = document.getElementById(`message-${messageId}`);
+    if (element) {
+      // Add a small delay to ensure the element is in the DOM
+      setTimeout(() => {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        element.classList.add('highlight');
+        setTimeout(() => element.classList.remove('highlight'), 2000);
+      }, 100);
     }
   };
 
@@ -204,6 +441,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     }
   };
 
+  // Find the current user's profile
+  const currentUserProfile = messages.find(m => m.user_id === user?.id)?.profiles;
+
   if (loading) {
     return <div className="p-4">Loading messages...</div>;
   }
@@ -222,13 +462,68 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               key={message.id}
               message={message}
               isOwnMessage={message.user_id === user?.id}
+              ownUsername={currentUserProfile?.username || user?.email || 'Me'}
               onRetry={() => retryMessage(message.id)}
+              onReply={handleReply}
+              onScrollToMessage={handleScrollToMessage}
             />
           ))}
           <div ref={messagesEndRef} />
         </div>
       </div>
       <div className="p-4 border-t">
+        {replyingTo && (
+          <div className="mb-2 p-2 bg-gray-100 rounded-lg flex justify-between items-center">
+            <div className="text-sm text-gray-600 flex items-center gap-2 min-w-0">
+              <span className="flex-shrink-0">Replying to:</span>
+              {replyingTo.media_url && (
+                <div className="relative w-8 h-8 flex-shrink-0">
+                  {(replyingTo.media_type === 'image' || replyingTo.media_type === 'gif') && (
+                    <img 
+                      src={replyingTo.media_url} 
+                      alt="Reply preview" 
+                      className="w-8 h-8 object-cover rounded"
+                    />
+                  )}
+                  {replyingTo.media_type === 'video' && (
+                    <video 
+                      src={replyingTo.media_url}
+                      className="w-8 h-8 object-cover rounded"
+                    >
+                      <source src={replyingTo.media_url} type="video/mp4" />
+                    </video>
+                  )}
+                  {replyingTo.media_type === 'video' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 rounded">
+                      <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z"/>
+                      </svg>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="truncate">
+                {replyingTo.content ? (
+                  <span className="truncate">
+                    {replyingTo.content.length > 50 
+                      ? replyingTo.content.substring(0, 50) + '...' 
+                      : replyingTo.content}
+                  </span>
+                ) : (
+                  replyingTo.media_type === 'image' ? 'Image' :
+                  replyingTo.media_type === 'video' ? 'Video' :
+                  replyingTo.media_type === 'gif' ? 'GIF' : 'Media'
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setReplyingTo(null)}
+              className="text-gray-500 hover:text-gray-700 flex-shrink-0 ml-2"
+            >
+              ×
+            </button>
+          </div>
+        )}
         <MessageInput onSend={sendMessage} chatId={params.chatId} />
       </div>
     </main>

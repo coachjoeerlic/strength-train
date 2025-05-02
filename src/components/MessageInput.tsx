@@ -104,16 +104,28 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
       return;
     }
 
+    const apiKey = process.env.NEXT_PUBLIC_TENOR_API_KEY;
+    if (!apiKey) {
+      setUploadError('GIF search is not configured. Please contact support.');
+      return;
+    }
+
     setIsSearchingGifs(true);
     try {
       const response = await fetch(
-        `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${process.env.NEXT_PUBLIC_TENOR_API_KEY}&client_key=strength-train&limit=10`
+        `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${apiKey}&client_key=strength-train&limit=10`
       );
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
       const data = await response.json();
       setGifResults(data.results || []);
     } catch (error) {
       console.error('Error searching GIFs:', error);
       setUploadError('Failed to search GIFs. Please try again.');
+      setGifResults([]);
     } finally {
       setIsSearchingGifs(false);
     }
@@ -192,11 +204,11 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
         >
           GIF
         </button>
-        <input
-          type="text"
+      <input
+        type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Type a message..."
+        placeholder="Type a message..."
           className="flex-1 min-w-0 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={isUploading}
         />
@@ -214,8 +226,8 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
           accept="image/*,video/mp4,video/webm"
           className="hidden"
           disabled={isUploading}
-        />
-      </div>
+      />
+    </div>
     </form>
   );
 } 
