@@ -15,8 +15,10 @@ export type Message = {
     profiles?: {
       username: string;
     };
+    is_read: boolean;
   };
   profiles?: {
     username: string;
   };
+  is_read: boolean;
 }; 
