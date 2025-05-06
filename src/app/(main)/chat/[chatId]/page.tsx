@@ -1238,6 +1238,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   });
 
   const handleReply = useCallback((message: Message) => {
+    console.log('[REPLYING] handleReply called with message:', message);
     setReplyingTo(message);
   }, []);
 
@@ -1256,6 +1257,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   const sendMessage = useCallback(async (content: string, mediaUrl?: string, mediaType?: string) => {
     if (!user) return;
     
+    console.log('[REPLYING] sendMessage called with content:', content, 'replyingTo ID:', replyingTo?.id);
+
     try {
       const messageData = {
         chat_id: params.chatId,
@@ -2580,13 +2583,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           filter: `chat_id=eq.${params.chatId}`
         },
         async (payload) => {
-          console.log('[REALTIME] New message received:', {
-            messageId: payload.new.id,
-            userId: payload.new.user_id,
-            isOwnMessage: payload.new.user_id === user.id,
-            currentUnreadCount: unreadCountRef.current,
-            firstUnreadId: firstUnreadIdRef.current
-          });
+          console.log('[REALTIME] New message received (raw payload.new):', payload.new);
 
           // If it's not our own message, update unread state immediately
           if (payload.new.user_id !== user.id) {
@@ -2616,7 +2613,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             .select(`
               *,
               is_read,
-              reply_to:messages!reply_to_message_id (
+              reply_to:reply_to_message_id (
                 content,
                 user_id,
                 media_url,
@@ -2631,23 +2628,46 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             console.error('[REALTIME] Error fetching new message:', messageError);
             return;
           }
+          console.log('[REALTIME] Fetched messageData for new message (includes reply_to snippet):', messageData);
 
           // Get profile for the new message
-          const { data: profileData } = await supabase
+          const { data: senderProfileData, error: senderProfileError } = await supabase
             .from('profiles')
             .select('id, username')
             .eq('id', payload.new.user_id)
             .single();
 
+          if (senderProfileError) {
+            console.error('[REALTIME] Error fetching profile for sender:', senderProfileError);
+            // Potentially return or use a default profile
+          }
+          console.log('[REALTIME] Profile data for main message sender:', senderProfileData);
+
+          let repliedToProfileData = null;
+          if (messageData && messageData.reply_to && messageData.reply_to.user_id) {
+            const { data: originalSenderProfile, error: originalSenderProfileError } = await supabase
+              .from('profiles')
+              .select('id, username')
+              .eq('id', messageData.reply_to.user_id)
+              .single();
+            if (originalSenderProfileError) {
+              console.error('[REALTIME] Error fetching profile for original sender of replied-to message:', originalSenderProfileError);
+            } else {
+              repliedToProfileData = originalSenderProfile;
+            }
+            console.log('[REALTIME] Profile data for original sender of replied-to message:', repliedToProfileData);
+          }
+
           if (messageData) {
             const newMessage = {
               ...messageData,
-              profiles: profileData,
+              profiles: senderProfileData, // Profile of the person who sent *this* message
               reply_to: messageData.reply_to ? {
                 ...messageData.reply_to,
-                profiles: profileData
+                profiles: repliedToProfileData // Profile of the person who sent the *original* message
               } : undefined
             };
+            console.log('[REALTIME] Constructed newMessage object for UI:', newMessage);
 
             console.log('[REALTIME] Adding new message to state:', {
               messageId: newMessage.id,
