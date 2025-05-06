@@ -368,225 +368,228 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
 
   // Helper: Fetch newer messages
   const fetchNewerMessages = useCallback(async () => {
-    const now = Date.now();
-    if (!hasNewer || isLoadingMoreRef.current || stateUpdateLock.current || fetchLock.current || 
-        fetchState.current !== 'idle' || (now - lastFetchTime.current < FETCH_COOLDOWN)) {
-      console.log('[PAGINATION] Skipping fetchNewerMessages:', {
-        hasNewer,
-        isLoadingMore: isLoadingMoreRef.current,
-        isStateLocked: stateUpdateLock.current,
-        isFetchLocked: fetchLock.current,
-        fetchState: fetchState.current,
-        timeSinceLastFetch: now - lastFetchTime.current,
-        currentMessageCount: messages.length,
-        reason: !hasNewer ? 'No newer messages' : 
-                isLoadingMoreRef.current ? 'Loading in progress' : 
-                stateUpdateLock.current ? 'State update in progress' :
-                fetchLock.current ? 'Fetch in progress' :
-                fetchState.current !== 'idle' ? 'Fetch state not idle' :
-                'In cooldown period'
-      });
-      return false;
-    }
-
-    // Add fetch to queue
-    const fetchPromise = async () => {
-      console.log('[PAGINATION] Starting fetchNewerMessages:', {
-        currentMessageCount: messages.length,
-        lastMessageTime: messages[messages.length - 1]?.created_at,
-        hasNewer,
-        isLoadingMore: isLoadingMoreRef.current,
-        timeSinceLastFetch: now - lastFetchTime.current,
-        fetchState: fetchState.current
-      });
-
-      // Set loading states
+    if (isLoadingMoreRef.current || !scrollContainerRef.current) return;
+    
+    try {
       isLoadingMoreRef.current = true;
-      stateUpdateLock.current = true;
-      fetchLock.current = true;
+      const container = scrollContainerRef.current;
+      const oldScrollHeight = container.scrollHeight;
+      const oldScrollTop = container.scrollTop;
 
-      try {
-        // Get the last message's timestamp to use as the cursor
-        const lastMessage = messages[messages.length - 1];
-        if (!lastMessage) {
-          console.log('[PAGINATION] No last message found');
-          return false;
-        }
+      const now = Date.now();
+      if (!hasNewer || stateUpdateLock.current || fetchLock.current || 
+          (now - lastFetchTime.current) < 1000) {
+        return;
+      }
 
-        const cursorTime = lastMessage.created_at;
-        console.log('[PAGINATION] Fetching with cursor:', {
-          cursorTime,
-          lastMessageId: lastMessage.id,
+      // Add fetch to queue
+      const fetchPromise = async () => {
+        console.log('[PAGINATION] Starting fetchNewerMessages:', {
           currentMessageCount: messages.length,
+          lastMessageTime: messages[messages.length - 1]?.created_at,
+          hasNewer,
+          isLoadingMore: isLoadingMoreRef.current,
+          timeSinceLastFetch: now - lastFetchTime.current,
           fetchState: fetchState.current
         });
 
-        // First check how many messages are available
-        const { count: totalNewerCount } = await supabase
-          .from('messages')
-          .select('id', { count: 'exact', head: true })
-          .eq('chat_id', params.chatId)
-          .gt('created_at', cursorTime);
+        // Set loading states
+        isLoadingMoreRef.current = true;
+        stateUpdateLock.current = true;
+        fetchLock.current = true;
 
-        console.log('[PAGINATION] Total newer messages available:', {
-          totalNewerCount: totalNewerCount || 0,
-          cursorTime,
-          fetchState: fetchState.current
-        });
-
-        if (!totalNewerCount || totalNewerCount === 0) {
-          console.log('[PAGINATION] No newer messages available');
-          setHasNewer(false);
-          return false;
-        }
-
-        const { data, error } = await supabase
-          .from('messages')
-          .select(`
-            *,
-            is_read,
-            reply_to:messages!reply_to_message_id (
-              content,
-              user_id,
-              media_url,
-              media_type,
-              is_read
-            )
-          `)
-          .eq('chat_id', params.chatId)
-          .order('created_at', { ascending: true })
-          .limit(50)
-          .gt('created_at', cursorTime);
-
-        if (error) {
-          console.error('[PAGINATION] Error fetching newer messages:', error);
-          throw error;
-        }
-
-        console.log('[PAGINATION] Fetch response:', {
-          messageCount: data?.length || 0,
-          firstMessageTime: data?.[0]?.created_at,
-          lastMessageTime: data?.[data.length - 1]?.created_at,
-          cursorTime,
-          totalNewerCount,
-          fetchState: fetchState.current
-        });
-
-        if (data && data.length > 0) {
-          // Get all user IDs from messages and replies
-          const userIds = new Set([
-            ...data.map(m => m.user_id),
-            ...data.filter(m => m.reply_to).map(m => m.reply_to.user_id)
-          ].filter(Boolean));
-
-          const { data: profilesData, error: profilesError } = await supabase
-            .from('profiles')
-            .select('id, username')
-            .in('id', Array.from(userIds));
-
-          if (profilesError) {
-            console.error('[PAGINATION] Error fetching profiles:', profilesError);
-            throw profilesError;
+        try {
+          // Get the last message's timestamp to use as the cursor
+          const lastMessage = messages[messages.length - 1];
+          if (!lastMessage) {
+            console.log('[PAGINATION] No last message found');
+            return false;
           }
 
-          const profilesMap = new Map(
-            profilesData?.map(profile => [profile.id, profile]) || []
-          );
+          const cursorTime = lastMessage.created_at;
+          console.log('[PAGINATION] Fetching with cursor:', {
+            cursorTime,
+            lastMessageId: lastMessage.id,
+            currentMessageCount: messages.length,
+            fetchState: fetchState.current
+          });
 
-          const transformedData = data.map(message => ({
-            ...message,
-            profiles: profilesMap.get(message.user_id),
-            reply_to: message.reply_to ? {
-              ...message.reply_to,
-              profiles: profilesMap.get(message.reply_to.user_id)
-            } : undefined
-          }));
+          // First check how many messages are available
+          const { count: totalNewerCount } = await supabase
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('chat_id', params.chatId)
+            .gt('created_at', cursorTime);
 
-          // Create a Map of existing messages for faster lookup
-          const existingMessages = new Map(messages.map(msg => [msg.id, msg]));
-          
-          // Filter out any messages that already exist
-          const newMessages = transformedData.filter(msg => !existingMessages.has(msg.id));
-          
-          if (newMessages.length === 0) {
-            console.log('[PAGINATION] No new messages to add, all were duplicates');
+          console.log('[PAGINATION] Total newer messages available:', {
+            totalNewerCount: totalNewerCount || 0,
+            cursorTime,
+            fetchState: fetchState.current
+          });
+
+          if (!totalNewerCount || totalNewerCount === 0) {
+            console.log('[PAGINATION] No newer messages available');
             setHasNewer(false);
             return false;
           }
 
-          console.log('[PAGINATION] Adding new messages:', {
-            newMessageCount: newMessages.length,
-            firstNewMessageTime: newMessages[0].created_at,
-            lastNewMessageTime: newMessages[newMessages.length - 1].created_at,
+          const { data, error } = await supabase
+            .from('messages')
+            .select(`
+              *,
+              is_read,
+              reply_to:messages!reply_to_message_id (
+                content,
+                user_id,
+                media_url,
+                media_type,
+                is_read
+              )
+            `)
+            .eq('chat_id', params.chatId)
+            .order('created_at', { ascending: true })
+            .limit(50)
+            .gt('created_at', cursorTime);
+
+          if (error) {
+            console.error('[PAGINATION] Error fetching newer messages:', error);
+            throw error;
+          }
+
+          console.log('[PAGINATION] Fetch response:', {
+            messageCount: data?.length || 0,
+            firstMessageTime: data?.[0]?.created_at,
+            lastMessageTime: data?.[data.length - 1]?.created_at,
+            cursorTime,
             totalNewerCount,
             fetchState: fetchState.current
           });
 
-          // Sort all messages by created_at
-          const allMessages = [...messages, ...newMessages].sort((a, b) => 
-            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-          );
+          if (data && data.length > 0) {
+            // Get all user IDs from messages and replies
+            const userIds = new Set([
+              ...data.map(m => m.user_id),
+              ...data.filter(m => m.reply_to).map(m => m.reply_to.user_id)
+            ].filter(Boolean));
 
-          // Update cursor with the newest message from the fetched data
-          const newCursor = transformedData[transformedData.length - 1].id;
-          const newCursorTime = transformedData[transformedData.length - 1].created_at;
+            const { data: profilesData, error: profilesError } = await supabase
+              .from('profiles')
+              .select('id, username')
+              .in('id', Array.from(userIds));
 
-          console.log('[PAGINATION] Updating state:', {
-            oldMessageCount: messages.length,
-            newMessageCount: allMessages.length,
-            oldCursorTime: cursorTime,
-            newCursorTime,
-            hasMoreMessages: totalNewerCount > newMessages.length,
+            if (profilesError) {
+              console.error('[PAGINATION] Error fetching profiles:', profilesError);
+              throw profilesError;
+            }
+
+            const profilesMap = new Map(
+              profilesData?.map(profile => [profile.id, profile]) || []
+            );
+
+            const transformedData = data.map(message => ({
+              ...message,
+              profiles: profilesMap.get(message.user_id),
+              reply_to: message.reply_to ? {
+                ...message.reply_to,
+                profiles: profilesMap.get(message.reply_to.user_id)
+              } : undefined
+            }));
+
+            // Create a Map of existing messages for faster lookup
+            const existingMessages = new Map(messages.map(msg => [msg.id, msg]));
+            
+            // Filter out any messages that already exist
+            const newMessages = transformedData.filter(msg => !existingMessages.has(msg.id));
+            
+            if (newMessages.length === 0) {
+              console.log('[PAGINATION] No new messages to add, all were duplicates');
+              setHasNewer(false);
+              return false;
+            }
+
+            console.log('[PAGINATION] Adding new messages:', {
+              newMessageCount: newMessages.length,
+              firstNewMessageTime: newMessages[0].created_at,
+              lastNewMessageTime: newMessages[newMessages.length - 1].created_at,
+              totalNewerCount,
+              fetchState: fetchState.current
+            });
+
+            // Sort all messages by created_at
+            const allMessages = [...messages, ...newMessages].sort((a, b) => 
+              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+
+            // Update cursor with the newest message from the fetched data
+            const newCursor = transformedData[transformedData.length - 1].id;
+            const newCursorTime = transformedData[transformedData.length - 1].created_at;
+
+            console.log('[PAGINATION] Updating state:', {
+              oldMessageCount: messages.length,
+              newMessageCount: allMessages.length,
+              oldCursorTime: cursorTime,
+              newCursorTime,
+              hasMoreMessages: totalNewerCount > newMessages.length,
+              fetchState: fetchState.current
+            });
+
+            // Update all states in a single batch and wait for them to complete
+            await Promise.all([
+              new Promise<void>(resolve => {
+                setMessages(allMessages);
+                resolve();
+              }),
+              new Promise<void>(resolve => {
+                setNewestCursor(newCursor);
+                resolve();
+              }),
+              new Promise<void>(resolve => {
+                setHasNewer(totalNewerCount > newMessages.length);
+                resolve();
+              })
+            ]);
+
+            // Wait for state to update
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // Return true to indicate new messages were loaded
+            return true;
+          } else {
+            console.log('[PAGINATION] No newer messages found');
+            setHasNewer(false);
+            return false;
+          }
+        } catch (err) {
+          console.error('[PAGINATION] Error in fetchNewerMessages:', err);
+          setError('Failed to load newer messages');
+          setHasNewer(false);
+          throw err;
+        } finally {
+          // Reset loading states
+          isLoadingMoreRef.current = false;
+          stateUpdateLock.current = false;
+          fetchLock.current = false;
+          console.log('[PAGINATION] Finished fetchNewerMessages:', {
             fetchState: fetchState.current
           });
-
-          // Update all states in a single batch and wait for them to complete
-          await Promise.all([
-            new Promise<void>(resolve => {
-              setMessages(allMessages);
-              resolve();
-            }),
-            new Promise<void>(resolve => {
-              setNewestCursor(newCursor);
-              resolve();
-            }),
-            new Promise<void>(resolve => {
-              setHasNewer(totalNewerCount > newMessages.length);
-              resolve();
-            })
-          ]);
-
-          // Wait for state to update
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-          // Return true to indicate new messages were loaded
-          return true;
-        } else {
-          console.log('[PAGINATION] No newer messages found');
-          setHasNewer(false);
-          return false;
         }
-      } catch (err) {
-        console.error('[PAGINATION] Error in fetchNewerMessages:', err);
-        setError('Failed to load newer messages');
-        setHasNewer(false);
-        throw err;
-      } finally {
-        // Reset loading states
-        isLoadingMoreRef.current = false;
-        stateUpdateLock.current = false;
-        fetchLock.current = false;
-        console.log('[PAGINATION] Finished fetchNewerMessages:', {
-          fetchState: fetchState.current
-        });
-      }
-    };
+      };
 
-    // Add to queue and process
-    fetchQueue.current.push(fetchPromise);
-    processFetchQueue();
+      // Add to queue and process
+      fetchQueue.current.push(fetchPromise);
+      processFetchQueue();
 
-    return true;
+      // After messages are added, restore scroll position
+      requestAnimationFrame(() => {
+        if (container) {
+          const newScrollHeight = container.scrollHeight;
+          const scrollDiff = newScrollHeight - oldScrollHeight;
+          container.scrollTop = oldScrollTop + scrollDiff;
+        }
+      });
+    } finally {
+      isLoadingMoreRef.current = false;
+    }
   }, [hasNewer, params.chatId, messages, processFetchQueue]);
 
   // Helper: Fetch more messages (pagination)
@@ -1448,57 +1451,40 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     }
   }, [firstUnreadId, messages, unreadMessagesLoaded, params.chatId]);
 
-  // Update unread state when messages change
-  useEffect(() => {
-    if (!user || messages.length === 0) return;
+  // Add a ref to track if we're manually handling unread state
+  const isManuallyHandlingUnread = useRef(false);
 
-    const unreadMessages = messages.filter(m => !m.is_read && m.user_id !== user.id);
-    const previousUnreadCount = unreadCount;
-    const newUnreadCount = unreadMessages.length;
-    
-    // Only update if there's an actual change in unread messages
-    if (previousUnreadCount !== newUnreadCount || 
-        (newUnreadCount > 0 && firstUnreadId !== unreadMessages[0]?.id)) {
+  // Update the unread state effect
+  useEffect(() => {
+    if (!user || !scrollContainerRef.current) return;
+
+    const container = scrollContainerRef.current;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    const isNearBottom = distanceFromBottom < 100;
+
+    // Only update unread state if we're near bottom or if there are unread messages
+    if (isNearBottom || unreadCount > 0) {
+      const previousUnreadCount = unreadCount;
+      const newUnreadCount = isNearBottom ? 0 : unreadCount;
+      const hasUnreadMessages = newUnreadCount > 0;
+
       console.log('[UNREAD] Updating unread state:', {
         previousUnreadCount,
         newUnreadCount,
         messageCount: messages.length,
         firstUnreadId,
-        hasUnreadMessages: unreadMessages.length > 0,
-        firstUnreadMessage: unreadMessages[0] ? {
-          id: unreadMessages[0].id,
-          created_at: unreadMessages[0].created_at
-        } : null
+        hasUnreadMessages,
+        isNearBottom,
+        distanceFromBottom
       });
 
-      // Only update unread count if it's increasing or we have no unread messages
-      if (newUnreadCount > previousUnreadCount || previousUnreadCount === 0) {
+      if (previousUnreadCount !== newUnreadCount) {
         setUnreadCount(newUnreadCount);
-      }
-
-      // Only update first unread ID if we have unread messages and don't already have one
-      if (unreadMessages.length > 0 && !firstUnreadId) {
-        const firstUnread = unreadMessages[0];
-        setFirstUnreadId(firstUnread.id);
-        console.log('[UNREAD] First unread message found:', {
-          messageId: firstUnread.id,
-          created_at: firstUnread.created_at,
-          totalUnread: unreadMessages.length
-        });
+        setFirstUnreadId(hasUnreadMessages ? firstUnreadId : null);
       }
     }
-
-    // Check if first unread message is loaded
-    if (firstUnreadId && !checkFirstUnreadLoaded(messages) && !unreadMessagesLoaded) {
-      console.log('[UNREAD] First unread message not loaded, triggering load:', {
-        firstUnreadId,
-        currentMessageCount: messages.length,
-        unreadCount: newUnreadCount,
-        unreadMessagesLoaded
-      });
-      loadMessagesAroundFirstUnread();
-    }
-  }, [messages, user, firstUnreadId, checkFirstUnreadLoaded, loadMessagesAroundFirstUnread, unreadMessagesLoaded]);
+  }, [user, messages, unreadCount, firstUnreadId, scrollContainerRef]);
 
   // Add test mode controls
   const TestControls = () => {
@@ -1700,15 +1686,15 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               firstMessageTime: sortedMessages[0].created_at,
               lastMessageTime: sortedMessages[sortedMessages.length - 1].created_at,
               testMode,
-              totalMessageCount,
-              hasMore: totalMessageCount > sortedMessages.length
+              totalMessageCount: totalMessageCount || 0,
+              hasMore: (totalMessageCount || 0) > sortedMessages.length
             });
 
             // Set initial messages and cursors
             setMessages(sortedMessages);
             setOldestCursor(sortedMessages[0].id);
             setNewestCursor(sortedMessages[sortedMessages.length - 1].id);
-            setHasMore(totalMessageCount > sortedMessages.length);
+            setHasMore((totalMessageCount || 0) > sortedMessages.length);
             setHasNewer(testMode === 'top');
 
             // Force scroll position based on test mode
@@ -1771,225 +1757,653 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     };
   }, [user, params.chatId, testMode]);
 
-  // Handle scroll button click
-  const handleScrollButtonClick = useCallback(async (event: React.MouseEvent) => {
+  // Add scrollToUnreadMessage function before handleScrollButtonClick
+  const scrollToUnreadMessage = useCallback(async (firstUnreadId: string) => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
-    // Prevent automatic triggering by checking if this is a user-initiated click
-    const isUserClick = event?.type === 'click';
-    if (!isUserClick) {
-      console.log('[SCROLL_BUTTON] Skipping automatic trigger');
-      return;
-    }
-
-    console.log('[SCROLL_BUTTON] Button clicked:', {
-      unreadCount,
+    console.log('[SCROLL_UNREAD] Starting scroll to unread:', {
       firstUnreadId,
-      hasNewer,
+      testMode,
       currentMessageCount: messages.length
     });
 
-    if (unreadCount > 0 && firstUnreadId) {
-      // If we have unread messages, scroll to the first unread
-      const unreadElement = document.getElementById(`message-${firstUnreadId}`);
-      if (unreadElement) {
-        console.log('[SCROLL_BUTTON] Scrolling to unread message:', {
-          messageId: firstUnreadId,
-          unreadCount
-        });
-        
-        // Ensure the element is in view
-        const containerRect = container.getBoundingClientRect();
-        const elementRect = unreadElement.getBoundingClientRect();
-        const offset = elementRect.top - containerRect.top;
-        
-        // Scroll with a small offset to ensure the message is visible
-        container.scrollTo({
-          top: container.scrollTop + offset - 100,
-          behavior: 'smooth'
-        });
-      }
-    } else if (hasNewer) {
-      // If we have newer messages, load them all and scroll to bottom
-      console.log('[SCROLL_BUTTON] Loading newer messages before scrolling to bottom');
+    // If in load-at-top mode, we need to ensure all messages up to the unread message are loaded
+    if (testMode === 'top') {
+      console.log('[SCROLL_UNREAD] Load-at-top mode detected, loading messages around unread');
       
       try {
-        let currentHasNewer = hasNewer;
-        let lastMessageCount = messages.length;
-        let consecutiveNoNewMessages = 0;
-        const maxConsecutiveNoNewMessages = 2;
+        // Get the unread message to get its timestamp
+        const { data: unreadMessage, error: unreadError } = await supabase
+          .from('messages')
+          .select('created_at')
+          .eq('id', firstUnreadId)
+          .single();
 
-        // Keep loading messages until we have no more newer messages
-        while (currentHasNewer) {
-          console.log('[SCROLL_BUTTON] Loading next batch of messages:', {
-            currentMessageCount: messages.length,
-            hasNewer: currentHasNewer,
-            lastMessageCount,
-            consecutiveNoNewMessages
-          });
-          
-          // Load next batch of messages and wait for it to complete
-          const newMessagesLoaded = await fetchNewerMessages();
-          
-          // Wait for state to update
-          await new Promise(resolve => setTimeout(resolve, 300));
-          
-          // Check if we actually got new messages
-          if (!newMessagesLoaded || messages.length === lastMessageCount) {
-            consecutiveNoNewMessages++;
-            console.log('[SCROLL_BUTTON] No new messages loaded:', {
-              consecutiveNoNewMessages,
-              currentMessageCount: messages.length,
-              newMessagesLoaded
-            });
-            
-            if (consecutiveNoNewMessages >= maxConsecutiveNoNewMessages) {
-              console.log('[SCROLL_BUTTON] No new messages after multiple attempts, breaking loop');
-              break;
-            }
-          } else {
-            consecutiveNoNewMessages = 0; // Reset counter if we got new messages
-            console.log('[SCROLL_BUTTON] New messages loaded:', {
-              previousCount: lastMessageCount,
-              newCount: messages.length,
-              difference: messages.length - lastMessageCount
-            });
-          }
-
-          // Update tracking variables
-          lastMessageCount = messages.length;
-          
-          // Update currentHasNewer based on the latest state
-          currentHasNewer = hasNewer;
-
-          // Log the current state after loading
-          console.log('[SCROLL_BUTTON] After loading batch:', {
-            messageCount: messages.length,
-            hasNewer,
-            scrollHeight: container.scrollHeight,
-            scrollTop: container.scrollTop
-          });
-
-          // Check if we've reached the newest message
-          if (!currentHasNewer) {
-            console.log('[SCROLL_BUTTON] No more newer messages available');
-            break;
-          }
+        if (unreadError || !unreadMessage) {
+          console.error('[SCROLL_UNREAD] Error fetching unread message:', unreadError);
+          return;
         }
-        
-        // Now scroll to bottom after all messages are loaded
-        console.log('[SCROLL_BUTTON] Finished loading messages:', {
-          finalMessageCount: messages.length,
-          scrollHeight: container.scrollHeight,
-          clientHeight: container.clientHeight,
-          currentScrollTop: container.scrollTop
-        });
-        
-        // Wait for any final renders
-        await new Promise(resolve => setTimeout(resolve, 300));
 
-        // Force scroll to bottom immediately
-        console.log('[SCROLL_BUTTON] Forcing initial scroll to bottom');
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior: 'auto'
-        });
+        // Get the timestamp of the oldest message in our current view
+        const oldestMessageTime = messages[0]?.created_at;
+        
+        // Fetch all messages between our oldest message and the unread message
+        const { data: newMessages, error: fetchError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('chat_id', params.chatId)
+          .order('created_at', { ascending: true })
+          .lt('created_at', unreadMessage.created_at)
+          .gt('created_at', oldestMessageTime);
 
-        // Double check scroll position after a short delay
-        setTimeout(() => {
-          const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-          console.log('[SCROLL_BUTTON] Checking final scroll position:', {
-            distanceFromBottom,
-            scrollHeight: container.scrollHeight,
-            scrollTop: container.scrollTop,
-            clientHeight: container.clientHeight
+        if (fetchError) {
+          console.error('[SCROLL_UNREAD] Error fetching messages:', fetchError);
+          return;
+        }
+
+        if (newMessages && newMessages.length > 0) {
+          console.log('[SCROLL_UNREAD] Adding messages before unread:', {
+            messageCount: newMessages.length,
+            firstMessageTime: newMessages[0].created_at,
+            lastMessageTime: newMessages[newMessages.length - 1].created_at
           });
-          
-          if (distanceFromBottom > 0) {
-            console.log('[SCROLL_BUTTON] Forcing final scroll to bottom');
-            container.scrollTo({
-              top: container.scrollHeight,
-              behavior: 'auto'
-            });
 
-            // One final check after forcing scroll
-            setTimeout(() => {
-              const finalDistanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-              if (finalDistanceFromBottom > 0) {
-                console.log('[SCROLL_BUTTON] Final scroll check - still not at bottom:', {
-                  distanceFromBottom: finalDistanceFromBottom,
-                  scrollHeight: container.scrollHeight,
-                  scrollTop: container.scrollTop,
-                  clientHeight: container.clientHeight
-                });
-                // One last attempt to force scroll
-                container.scrollTo({
-                  top: container.scrollHeight,
-                  behavior: 'auto'
-                });
-              }
-            }, 100);
-          }
-        }, 100);
-      } catch (error) {
-        console.error('[SCROLL_BUTTON] Error loading newer messages:', error);
-        // Even if there's an error, try to scroll to bottom
-        console.log('[SCROLL_BUTTON] Forcing scroll to bottom after error');
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior: 'auto'
-        });
+          setMessages(prevMessages => {
+            const existingMessages = new Map(prevMessages.map(msg => [msg.id, msg]));
+            const uniqueNewMessages = newMessages.filter(msg => !existingMessages.has(msg.id));
+            return [...prevMessages, ...uniqueNewMessages].sort((a, b) => 
+              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+          });
+
+          // Wait for state update and DOM to reflect changes
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } catch (err) {
+        console.error('[SCROLL_UNREAD] Error in load-at-top mode:', err);
+        return;
       }
-    } else {
-      // Otherwise just scroll to bottom
-      console.log('[SCROLL_BUTTON] Scrolling to bottom');
+    }
+
+    // Now scroll to the unread message
+    const unreadElement = document.getElementById(`message-${firstUnreadId}`);
+    if (unreadElement) {
+      console.log('[SCROLL_UNREAD] Scrolling to unread message:', {
+        messageId: firstUnreadId,
+        testMode
+      });
       
-      // Force scroll to bottom immediately
-      console.log('[SCROLL_BUTTON] Forcing initial scroll to bottom');
+      // Get container and element dimensions
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = unreadElement.getBoundingClientRect();
+      const offset = elementRect.top - containerRect.top;
+      
+      // Scroll with a small offset to ensure the message is visible
       container.scrollTo({
-        top: container.scrollHeight,
-        behavior: 'auto'
+        top: container.scrollTop + offset - 100,
+        behavior: 'smooth'
       });
 
       // Double check scroll position after a short delay
       setTimeout(() => {
-        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-        console.log('[SCROLL_BUTTON] Checking final scroll position:', {
-          distanceFromBottom,
-          scrollHeight: container.scrollHeight,
-          scrollTop: container.scrollTop,
-          clientHeight: container.clientHeight
-        });
+        const finalElementRect = unreadElement.getBoundingClientRect();
+        const finalContainerRect = container.getBoundingClientRect();
+        const finalOffset = finalElementRect.top - finalContainerRect.top;
         
-        if (distanceFromBottom > 0) {
-          console.log('[SCROLL_BUTTON] Forcing final scroll to bottom');
+        if (Math.abs(finalOffset - 100) > 50) {
+          console.log('[SCROLL_UNREAD] Adjusting final scroll position:', {
+            initialOffset: offset,
+            finalOffset,
+            difference: finalOffset - offset
+          });
+          
           container.scrollTo({
-            top: container.scrollHeight,
+            top: container.scrollTop + finalOffset - 100,
             behavior: 'auto'
           });
-
-          // One final check after forcing scroll
-          setTimeout(() => {
-            const finalDistanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-            if (finalDistanceFromBottom > 0) {
-              console.log('[SCROLL_BUTTON] Final scroll check - still not at bottom:', {
-                distanceFromBottom: finalDistanceFromBottom,
-                scrollHeight: container.scrollHeight,
-                scrollTop: container.scrollTop,
-                clientHeight: container.clientHeight
-              });
-              // One last attempt to force scroll
-              container.scrollTo({
-                top: container.scrollHeight,
-                behavior: 'auto'
-              });
-            }
-          }, 100);
         }
       }, 100);
+    } else {
+      console.log('[SCROLL_UNREAD] Unread message element not found:', firstUnreadId);
     }
-  }, [unreadCount, firstUnreadId, hasNewer, messages.length, fetchNewerMessages]);
+  }, [messages, testMode, params.chatId]);
+
+  // Add scroll state management
+  const [scrollState, setScrollState] = useState<{
+    isScrolling: boolean;
+    targetId: string | null;
+    direction: 'top' | 'bottom' | null;
+    loadingMessages: boolean;
+    unreadCount: number;
+    firstUnreadId: string | null;
+    hasNewer: boolean;
+    testMode: 'top' | 'bottom';
+  }>({
+    isScrolling: false,
+    targetId: null,
+    direction: null,
+    loadingMessages: false,
+    unreadCount: 0,
+    firstUnreadId: null,
+    hasNewer: false,
+    testMode: 'bottom'
+  });
+
+  // Add scroll operation queue
+  type ScrollOperation = {
+    targetId: string;
+    direction: 'top' | 'bottom';
+    offset: number;
+  };
+
+  const scrollQueue = useRef<ScrollOperation[]>([]);
+  const isProcessingScrollQueue = useRef(false);
+
+  // Add scroll position calculation function (moved to top to fix linter errors)
+  const calculateScrollPosition = useCallback((
+    targetElement: HTMLElement,
+    container: HTMLElement,
+    options: {
+      offset?: number;
+      behavior?: ScrollBehavior;
+      direction?: 'top' | 'bottom';
+      considerCurrentPosition?: boolean;
+    } = {}
+  ) => {
+    const {
+      offset = 100,
+      behavior = 'smooth',
+      direction = 'top',
+      considerCurrentPosition = true
+    } = options;
+
+    // Get container and element dimensions
+    const containerRect = container.getBoundingClientRect();
+    const elementRect = targetElement.getBoundingClientRect();
+    
+    // Calculate the base offset
+    const baseOffset = elementRect.top - containerRect.top;
+    
+    // Calculate the final scroll position
+    let finalScrollTop: number;
+    
+    if (direction === 'top') {
+      // For top direction, we want the element to be at the top of the viewport
+      finalScrollTop = container.scrollTop + baseOffset - offset;
+    } else {
+      // For bottom direction, we want the element to be at the bottom of the viewport
+      finalScrollTop = container.scrollTop + baseOffset - (containerRect.height - elementRect.height - offset);
+    }
+
+    // If we should consider current position, adjust for any existing scroll
+    if (considerCurrentPosition) {
+      const currentScrollTop = container.scrollTop;
+      const scrollDiff = finalScrollTop - currentScrollTop;
+      
+      // If the scroll difference is small, don't scroll
+      if (Math.abs(scrollDiff) < 10) {
+        console.log('[SCROLL] Scroll difference too small, skipping:', {
+          currentScrollTop,
+          finalScrollTop,
+          difference: scrollDiff
+        });
+        return false;
+      }
+    }
+
+    // Ensure the scroll position is within bounds
+    finalScrollTop = Math.max(0, Math.min(finalScrollTop, container.scrollHeight - container.clientHeight));
+
+    console.log('[SCROLL] Calculating scroll position:', {
+      baseOffset,
+      finalScrollTop,
+      containerHeight: containerRect.height,
+      elementHeight: elementRect.height,
+      currentScrollTop: container.scrollTop,
+      maxScroll: container.scrollHeight - container.clientHeight,
+      direction,
+      behavior
+    });
+
+    return {
+      scrollTop: finalScrollTop,
+      behavior
+    };
+  }, []);
+
+  // Add scroll position verification function (moved to top to fix linter errors)
+  const verifyScrollPosition = useCallback((
+    targetElement: HTMLElement,
+    container: HTMLElement,
+    options: {
+      offset?: number;
+      direction?: 'top' | 'bottom';
+      maxAttempts?: number;
+    } = {}
+  ) => {
+    const {
+      offset = 100,
+      direction = 'top',
+      maxAttempts = 3
+    } = options;
+
+    return new Promise<boolean>((resolve) => {
+      let attempts = 0;
+
+      const checkPosition = () => {
+        const containerRect = container.getBoundingClientRect();
+        const elementRect = targetElement.getBoundingClientRect();
+        const currentOffset = elementRect.top - containerRect.top;
+        
+        // Calculate the expected position based on direction
+        const expectedPosition = direction === 'top' ? offset : containerRect.height - elementRect.height - offset;
+        const positionDiff = Math.abs(currentOffset - expectedPosition);
+        
+        const isCorrectPosition = positionDiff <= 50;
+
+        console.log('[SCROLL] Verifying scroll position:', {
+          attempt: attempts + 1,
+          currentOffset,
+          expectedPosition,
+          positionDiff,
+          isCorrectPosition,
+          direction,
+          containerHeight: containerRect.height,
+          elementHeight: elementRect.height
+        });
+
+        if (isCorrectPosition || attempts >= maxAttempts) {
+          resolve(isCorrectPosition);
+          return;
+        }
+
+        // Adjust scroll position if needed
+        const scrollOptions = calculateScrollPosition(targetElement, container, {
+          offset,
+          behavior: 'auto',
+          direction,
+          considerCurrentPosition: false
+        });
+
+        if (scrollOptions) {
+          container.scrollTo(scrollOptions);
+        }
+
+        attempts++;
+        setTimeout(checkPosition, 100);
+      };
+
+      checkPosition();
+    });
+  }, [calculateScrollPosition]);
+
+  // Add helper function to find element with retry
+  const findElementWithRetry = useCallback(async (
+    elementId: string,
+    maxAttempts: number = 5,
+    delay: number = 200
+  ): Promise<HTMLElement | null> => {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const element = document.getElementById(elementId);
+      if (element) {
+        console.log('[SCROLL] Found element on attempt:', {
+          attempt,
+          elementId,
+          elementHeight: element.offsetHeight,
+          elementTop: element.offsetTop
+        });
+        return element;
+      }
+      
+      console.log('[SCROLL] Element not found, retrying:', {
+        attempt,
+        maxAttempts,
+        elementId
+      });
+      
+      // Wait before next attempt
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    
+    console.log('[SCROLL] Element not found after all attempts:', {
+      elementId,
+      maxAttempts
+    });
+    return null;
+  }, []);
+
+  // Update processScrollQueue to use retry logic
+  const processScrollQueue = async () => {
+    if (scrollQueue.current.length === 0) return;
+
+    const { targetId, direction } = scrollQueue.current[0];
+    console.log('[SCROLL_QUEUE] Processing scroll operation:', { targetId, direction });
+
+    try {
+      // Wait for state updates and DOM changes
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Find the target element with retry
+      const element = await findElementWithRetry(`message-${targetId}`, 10, 300);
+      if (!element) {
+        console.error('[SCROLL_QUEUE] Target element not found after retries');
+        scrollQueue.current.shift();
+        return;
+      }
+
+      const container = scrollContainerRef.current;
+      if (!container) {
+        console.error('[SCROLL_QUEUE] Container not found');
+        scrollQueue.current.shift();
+        return;
+      }
+
+      // Get element and container dimensions
+      const elementRect = element.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const elementTop = elementRect.top - containerRect.top + container.scrollTop;
+      const elementHeight = elementRect.height;
+      const containerHeight = containerRect.height;
+
+      console.log('[SCROLL_QUEUE] Element dimensions:', {
+        elementTop,
+        elementHeight,
+        containerHeight,
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight
+      });
+
+      // Calculate target scroll position
+      let targetScrollTop;
+      if (direction === 'top') {
+        // For top direction, position element at top of container with padding
+        targetScrollTop = Math.max(0, elementTop - 100);
+      } else {
+        // For bottom direction, position element at bottom of container with padding
+        targetScrollTop = Math.min(
+          container.scrollHeight - containerHeight,
+          elementTop - containerHeight + elementHeight + 100
+        );
+      }
+
+      // Ensure scroll position is within bounds
+      targetScrollTop = Math.max(0, Math.min(targetScrollTop, container.scrollHeight - containerHeight));
+
+      console.log('[SCROLL_QUEUE] Scrolling to position:', {
+        targetScrollTop,
+        currentScrollTop: container.scrollTop,
+        difference: targetScrollTop - container.scrollTop
+      });
+
+      // Perform the scroll in one smooth operation
+      container.scrollTo({
+        top: targetScrollTop,
+        behavior: 'smooth'
+      });
+
+      // Wait for scroll to complete
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Verify final scroll position
+      const finalElementRect = element.getBoundingClientRect();
+      const finalContainerRect = container.getBoundingClientRect();
+      const finalElementTop = finalElementRect.top - finalContainerRect.top + container.scrollTop;
+      const positionDiff = Math.abs(finalElementTop - (direction === 'top' ? 100 : containerHeight - 100));
+
+      console.log('[SCROLL_QUEUE] Scroll verification:', {
+        finalElementTop,
+        targetPosition: direction === 'top' ? 100 : containerHeight - 100,
+        positionDiff,
+        scrollTop: container.scrollTop
+      });
+
+      // If position difference is too large, make a precise adjustment
+      if (positionDiff > 10) {
+        const adjustment = direction === 'top' ? 100 - finalElementTop : containerHeight - 100 - finalElementTop;
+        container.scrollBy({
+          top: adjustment,
+          behavior: 'auto'
+        });
+      }
+
+    } catch (error) {
+      console.error('[SCROLL_QUEUE] Error processing scroll:', error);
+    } finally {
+      scrollQueue.current.shift();
+    }
+  };
+
+  // Update handleScrollButtonClick to ensure DOM is ready
+  const handleScrollButtonClick = useCallback(async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+
+    // If we're near bottom, just scroll to bottom
+    if (isNearBottom) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth'
+      });
+      return;
+    }
+
+    // If we have an unread message, scroll to it
+    if (unreadCount > 0 && firstUnreadId) {
+      console.log('[SCROLL_BUTTON] Button clicked:', {
+        unreadCount,
+        firstUnreadId,
+        hasNewer,
+        testMode,
+        isNearBottom,
+        messageCount: messages.length,
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+        clientHeight: container.clientHeight
+      });
+
+      try {
+        // First, get the unread message to get its timestamp
+        const { data: unreadData, error: unreadError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('id', firstUnreadId)
+          .single();
+
+        if (unreadError || !unreadData) {
+          console.error('[SCROLL_BUTTON] Error fetching unread message:', unreadError);
+          return;
+        }
+
+        console.log('[SCROLL_BUTTON] Found unread message:', {
+          messageId: unreadData.id,
+          created_at: unreadData.created_at,
+          currentMessageCount: messages.length
+        });
+
+        // In load-at-top mode, we need to fetch messages before the unread message
+        if (testMode === 'top') {
+          // Get the timestamp of the oldest message in our current view
+          const oldestMessageTime = messages[0]?.created_at;
+          
+          console.log('[SCROLL_BUTTON] Fetching messages before unread:', {
+            unreadMessageTime: unreadData.created_at,
+            oldestMessageTime,
+            currentMessageCount: messages.length
+          });
+
+          // Fetch messages between our oldest message and the unread message
+          const { data: olderMessages, error: olderError } = await supabase
+            .from('messages')
+            .select(`
+              *,
+              is_read,
+              reply_to:messages!reply_to_message_id (
+                content,
+                user_id,
+                media_url,
+                media_type,
+                is_read
+              )
+            `)
+            .eq('chat_id', params.chatId)
+            .lte('created_at', unreadData.created_at)
+            .gt('created_at', oldestMessageTime)
+            .order('created_at', { ascending: true });
+
+          if (olderError) {
+            console.error('[SCROLL_BUTTON] Error fetching older messages:', olderError);
+            return;
+          }
+
+          if (olderMessages && olderMessages.length > 0) {
+            console.log('[SCROLL_BUTTON] Adding older messages:', {
+              messageCount: olderMessages.length,
+              firstMessageTime: olderMessages[0].created_at,
+              lastMessageTime: olderMessages[olderMessages.length - 1].created_at
+            });
+
+            // Get all user IDs from messages and replies
+            const userIds = new Set([
+              ...olderMessages.map(m => m.user_id),
+              ...olderMessages.filter(m => m.reply_to).map(m => m.reply_to.user_id)
+            ].filter(Boolean));
+
+            const { data: profilesData, error: profilesError } = await supabase
+              .from('profiles')
+              .select('id, username')
+              .in('id', Array.from(userIds));
+
+            if (profilesError) {
+              console.error('[SCROLL_BUTTON] Error fetching profiles:', profilesError);
+              return;
+            }
+
+            const profilesMap = new Map(
+              profilesData?.map(profile => [profile.id, profile]) || []
+            );
+
+            const transformedData = olderMessages.map(message => ({
+              ...message,
+              profiles: profilesMap.get(message.user_id),
+              reply_to: message.reply_to ? {
+                ...message.reply_to,
+                profiles: profilesMap.get(message.reply_to.user_id)
+              } : undefined
+            }));
+
+            // Update messages state with new messages
+            setMessages(prev => {
+              const existingMessages = new Map(prev.map(msg => [msg.id, msg]));
+              const uniqueNewMessages = transformedData.filter(msg => !existingMessages.has(msg.id));
+              
+              console.log('[SCROLL_BUTTON] Merging messages:', {
+                previousCount: prev.length,
+                newCount: uniqueNewMessages.length,
+                totalCount: prev.length + uniqueNewMessages.length
+              });
+
+              // Ensure the unread message is included
+              const allMessages = [...prev, ...uniqueNewMessages].sort((a, b) => 
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+
+              // Verify the unread message is in the array
+              const hasUnreadMessage = allMessages.some(msg => msg.id === firstUnreadId);
+              console.log('[SCROLL_BUTTON] Message array check:', {
+                hasUnreadMessage,
+                unreadMessageId: firstUnreadId,
+                totalMessages: allMessages.length,
+                firstMessageId: allMessages[0]?.id,
+                lastMessageId: allMessages[allMessages.length - 1]?.id
+              });
+
+              return allMessages;
+            });
+
+            // Wait for state update and DOM to reflect changes
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            // Try to find the unread message element with retries
+            let unreadElement = null;
+            let attempts = 0;
+            const maxAttempts = 5;
+
+            while (!unreadElement && attempts < maxAttempts) {
+              unreadElement = document.getElementById(`message-${firstUnreadId}`);
+              if (!unreadElement) {
+                console.log('[SCROLL_BUTTON] Waiting for unread message element, attempt:', attempts + 1);
+                // Force a re-render by updating a dummy state
+                setMessages(prev => [...prev]);
+                await new Promise(resolve => setTimeout(resolve, 200));
+                attempts++;
+              }
+            }
+
+            if (unreadElement) {
+              console.log('[SCROLL_BUTTON] Found unread message element after', attempts + 1, 'attempts');
+              unreadElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              setUnreadCount(0);
+              setFirstUnreadId(null);
+            } else {
+              console.error('[SCROLL_BUTTON] Unread message element not found after', maxAttempts, 'attempts');
+              // Try one last time with a longer delay
+              await new Promise(resolve => setTimeout(resolve, 500));
+              const finalAttempt = document.getElementById(`message-${firstUnreadId}`);
+              if (finalAttempt) {
+                console.log('[SCROLL_BUTTON] Found unread message element on final attempt');
+                finalAttempt.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                setUnreadCount(0);
+                setFirstUnreadId(null);
+              }
+            }
+          }
+        }
+
+        // Now scroll to the unread message
+        const unreadElement = document.getElementById(`message-${firstUnreadId}`);
+        if (unreadElement) {
+          console.log('[SCROLL_BUTTON] Scrolling to unread message');
+          unreadElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setUnreadCount(0);
+          setFirstUnreadId(null);
+        } else {
+          console.error('[SCROLL_BUTTON] Unread message element not found after loading messages');
+        }
+      } catch (error) {
+        console.error('[SCROLL_BUTTON] Error handling unread message:', error);
+      }
+    } else {
+      // If no unread messages, scroll to bottom
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [unreadCount, firstUnreadId, hasNewer, testMode, messages, params.chatId]);
+
+  // Debounce scroll position updates
+  const debouncedScrollCheck = useCallback(
+    debounce((container: HTMLDivElement) => {
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      console.log('[SCROLL_BUTTON] Scroll position check:', {
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+        clientHeight: container.clientHeight,
+        distanceFromBottom: container.scrollHeight - container.scrollTop - container.clientHeight,
+        isNearBottom
+      });
+    }, 100),
+    []
+  );
+
+  const handleScroll = useCallback(() => {
+    if (!scrollContainerRef.current) return;
+    debouncedScrollCheck(scrollContainerRef.current);
+  }, [debouncedScrollCheck]);
 
   // Add real-time message handling
   useEffect(() => {
