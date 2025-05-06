@@ -2377,11 +2377,168 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         console.error('[SCROLL_BUTTON] Error handling unread message:', error);
       }
     } else {
-      // If no unread messages, scroll to bottom
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: 'smooth'
-      });
+      // If no unread messages, handle scroll to bottom based on test mode
+      if (testMode === 'top') {
+        console.log('[SCROLL_BUTTON] Scroll to bottom in load-at-top mode:', {
+          currentMessageCount: messages.length,
+          hasNewer,
+          testMode
+        });
+
+        try {
+          // Get the timestamp of the newest message in our current view
+          const newestMessageTime = messages[messages.length - 1]?.created_at;
+          
+          console.log('[SCROLL_BUTTON] Fetching newer messages:', {
+            newestMessageTime,
+            currentMessageCount: messages.length
+          });
+
+          // Fetch messages after our newest message
+          const { data: newerMessages, error: newerError } = await supabase
+            .from('messages')
+            .select(`
+              *,
+              is_read,
+              reply_to:messages!reply_to_message_id (
+                content,
+                user_id,
+                media_url,
+                media_type,
+                is_read
+              )
+            `)
+            .eq('chat_id', params.chatId)
+            .gt('created_at', newestMessageTime)
+            .order('created_at', { ascending: true });
+
+          if (newerError) {
+            console.error('[SCROLL_BUTTON] Error fetching newer messages:', newerError);
+            return;
+          }
+
+          if (newerMessages && newerMessages.length > 0) {
+            console.log('[SCROLL_BUTTON] Adding newer messages:', {
+              messageCount: newerMessages.length,
+              firstMessageTime: newerMessages[0].created_at,
+              lastMessageTime: newerMessages[newerMessages.length - 1].created_at
+            });
+
+            // Get all user IDs from messages and replies
+            const userIds = new Set([
+              ...newerMessages.map(m => m.user_id),
+              ...newerMessages.filter(m => m.reply_to).map(m => m.reply_to.user_id)
+            ].filter(Boolean));
+
+            const { data: profilesData, error: profilesError } = await supabase
+              .from('profiles')
+              .select('id, username')
+              .in('id', Array.from(userIds));
+
+            if (profilesError) {
+              console.error('[SCROLL_BUTTON] Error fetching profiles:', profilesError);
+              return;
+            }
+
+            const profilesMap = new Map(
+              profilesData?.map(profile => [profile.id, profile]) || []
+            );
+
+            const transformedData = newerMessages.map(message => ({
+              ...message,
+              profiles: profilesMap.get(message.user_id),
+              reply_to: message.reply_to ? {
+                ...message.reply_to,
+                profiles: profilesMap.get(message.reply_to.user_id)
+              } : undefined
+            }));
+
+            // Update messages state with new messages
+            setMessages(prev => {
+              const existingMessages = new Map(prev.map(msg => [msg.id, msg]));
+              const uniqueNewMessages = transformedData.filter(msg => !existingMessages.has(msg.id));
+              
+              console.log('[SCROLL_BUTTON] Merging messages:', {
+                previousCount: prev.length,
+                newCount: uniqueNewMessages.length,
+                totalCount: prev.length + uniqueNewMessages.length
+              });
+
+              // Sort all messages by created_at
+              const allMessages = [...prev, ...uniqueNewMessages].sort((a, b) => 
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+
+              return allMessages;
+            });
+
+            // Wait for state update and DOM to reflect changes
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            // Try to scroll to bottom with retries
+            let attempts = 0;
+            const maxAttempts = 5;
+            let scrolled = false;
+
+            while (!scrolled && attempts < maxAttempts) {
+              console.log('[SCROLL_BUTTON] Attempting to scroll to bottom, attempt:', attempts + 1);
+              
+              // Force a re-render by updating a dummy state
+              setMessages(prev => [...prev]);
+              
+              // Wait for DOM update
+              await new Promise(resolve => setTimeout(resolve, 200));
+              
+              // Scroll to bottom
+              container.scrollTo({
+                top: container.scrollHeight,
+                behavior: 'smooth'
+              });
+              
+              // Verify scroll position
+              await new Promise(resolve => setTimeout(resolve, 100));
+              const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 10;
+              
+              if (isAtBottom) {
+                console.log('[SCROLL_BUTTON] Successfully scrolled to bottom');
+                scrolled = true;
+              } else {
+                console.log('[SCROLL_BUTTON] Scroll verification failed, retrying...');
+                attempts++;
+              }
+            }
+
+            if (!scrolled) {
+              console.error('[SCROLL_BUTTON] Failed to scroll to bottom after', maxAttempts, 'attempts');
+              // Try one last time with a longer delay
+              await new Promise(resolve => setTimeout(resolve, 500));
+              container.scrollTo({
+                top: container.scrollHeight,
+                behavior: 'auto'
+              });
+            }
+          } else {
+            console.log('[SCROLL_BUTTON] No newer messages found, scrolling to current bottom');
+            container.scrollTo({
+              top: container.scrollHeight,
+              behavior: 'smooth'
+            });
+          }
+        } catch (error) {
+          console.error('[SCROLL_BUTTON] Error handling scroll to bottom:', error);
+          // Fallback to simple scroll
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      } else {
+        // If not in load-at-top mode, use simple scroll
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
     }
   }, [unreadCount, firstUnreadId, hasNewer, testMode, messages, params.chatId]);
 
