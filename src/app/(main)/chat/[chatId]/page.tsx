@@ -611,6 +611,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       return;
     }
     
+    console.log('[DEBUG] fetchMoreMessages: messages[0].created_at BEFORE fetch:', messages[0]?.created_at);
+    console.log('[DEBUG] fetchMoreMessages: oldestCursor state BEFORE fetch:', oldestCursor);
     console.log('[PAGINATION] Starting to fetch more messages:', {
       oldestCursor,
       currentMessageCount: messages.length,
@@ -640,10 +642,10 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         console.error('[PAGINATION] Error fetching cursor message:', cursorError);
         // Try to recover by using the oldest message's timestamp
         if (messages.length > 0) {
-          const oldestMessage = messages[0];
-          console.log('[PAGINATION] Recovering from cursor error using oldest message:', {
-            messageId: oldestMessage.id,
-            created_at: oldestMessage.created_at
+          const oldestMessageInState = messages[0];
+          console.log('[PAGINATION] Recovering from cursor error using oldest message in state:', {
+            messageId: oldestMessageInState.id,
+            created_at: oldestMessageInState.created_at
           });
           
           // Fetch messages before the oldest message
@@ -663,7 +665,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             .eq('chat_id', params.chatId)
             .order('created_at', { ascending: true })
             .limit(100) // Increased limit for better pagination
-            .lt('created_at', oldestMessage.created_at);
+            .lt('created_at', oldestMessageInState.created_at);
 
           if (error) {
             console.error('[PAGINATION] Error in recovery fetch:', error);
@@ -755,7 +757,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       }
 
       console.log('[PAGINATION] Executing query with cursor:', {
-        cursor: cursorMessage.created_at,
+        cursor: cursorMessage.created_at, // This is Timestamp_A for the DEBUG logs
         chatId: params.chatId,
         oldestCursor,
         currentMessages: messages.length
@@ -774,8 +776,11 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       });
 
       if (!totalOlderCount || totalOlderCount === 0) {
-        console.log('[PAGINATION] No older messages available');
+        console.log('[PAGINATION] No older messages available based on totalOlderCount');
         setHasMore(false);
+        setLoadingMore(false);
+        isLoadingMoreRef.current = false;
+        fetchState.current = 'idle';
         return;
       }
 
@@ -794,8 +799,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           )
         `)
         .eq('chat_id', params.chatId)
-        .order('created_at', { ascending: true })
-        .limit(100) // Increased limit to fetch more messages at once
+        .order('created_at', { ascending: false }) // Fetch in descending order
+        .limit(100) 
         .lt('created_at', cursorMessage.created_at);
 
       if (error) {
@@ -805,10 +810,10 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
 
       console.log('[PAGINATION] Fetched messages:', {
         count: data?.length || 0,
-        firstMessageTime: data?.[0]?.created_at,
-        lastMessageTime: data?.[data.length - 1]?.created_at,
+        firstMessageTime: data?.[0]?.created_at, // This is Timestamp_B for the DEBUG logs
+        lastMessageTime: data?.[data.length - 1]?.created_at, // This is Timestamp_C for the DEBUG logs
         cursor: cursorMessage.created_at,
-        hasMore: data?.length === 100,
+        hasMore: data?.length === 100, // This specific hasMore is a bit misleading here, relies on totalOlderCount later
         existingMessageCount: messages.length,
         totalOlderCount
       });
@@ -834,7 +839,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           profilesData?.map(profile => [profile.id, profile]) || []
         );
 
-        const transformedData = data.map(message => ({
+        const transformedDataWithProfiles = data.map(message => ({
           ...message,
           profiles: profilesMap.get(message.user_id),
           reply_to: message.reply_to ? {
@@ -842,6 +847,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             profiles: profilesMap.get(message.reply_to.user_id)
           } : undefined
         }));
+        
+        // Reverse the array so it's in chronological order for prepending
+        const transformedData = transformedDataWithProfiles.reverse();
 
         console.log('[PAGINATION] Transforming messages:', {
           originalCount: data.length,
@@ -864,7 +872,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           const newMessages = transformedData.filter(msg => !existingMessages.has(msg.id));
           
           if (newMessages.length === 0) {
-            console.log('[PAGINATION] No new messages to add, all were duplicates');
+            console.log('[PAGINATION] No new messages to add, all were duplicates or empty fetch');
             setHasMore(false);
             return prevMessages;
           }
@@ -927,8 +935,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       isLoadingMoreRef.current = false;
       fetchState.current = 'idle';
       console.log('[PAGINATION] State transition: updating -> idle');
+      console.log('[DEBUG] fetchMoreMessages: messages[0].created_at AFTER fetch and state update (via effect likely needed for accurate value):', messages[0]?.created_at); // This log might not show the updated value immediately due to closure
     }
-  }, [hasMore, loadingMore, oldestCursor, params.chatId, messages.length, testMode]);
+  }, [hasMore, loadingMore, oldestCursor, params.chatId, messages, testMode]); // Added messages to dependency array for more accurate logging of messages[0]
 
   // Modify the intersection observer setup
   useEffect(() => {
@@ -1705,15 +1714,6 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                 if (container) {
                   container.scrollTop = 0;
                   console.log('[INITIAL] Forced scroll to top');
-                }
-              });
-            } else {
-              // For bottom loading, scroll to bottom
-              requestAnimationFrame(() => {
-                const container = scrollContainerRef.current;
-                if (container) {
-                  container.scrollTop = container.scrollHeight;
-                  console.log('[INITIAL] Forced scroll to bottom');
                 }
               });
             }
