@@ -9,6 +9,54 @@ import { RealtimeChannel } from '@supabase/supabase-js';
 import { Message } from '@/types/message';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import debounce from 'lodash.debounce';
+import React from 'react';
+import { isToday, format, startOfDay, isSameDay } from 'date-fns';
+
+// Add throb animation via a style tag in the component
+function addThrobAnimation() {
+  // Only add the style tag once
+  if (typeof window !== 'undefined' && !document.getElementById('throb-animation-style')) {
+    const style = document.createElement('style');
+    style.id = 'throb-animation-style';
+    style.innerHTML = `
+      @keyframes throb {
+        0%, 100% { transform: scale(1); opacity: 0.7; }
+        50% { transform: scale(1.1); opacity: 1; }
+      }
+      .animate-throb {
+        animation: throb 1.5s ease-in-out infinite;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
+
+// Add UnreadBanner component
+function UnreadBanner() {
+  return (
+    <div 
+      className="w-full py-2 px-4 my-2 bg-blue-50 border-l-4 border-blue-500 rounded-r-md"
+      data-testid="unread-banner"
+    >
+      <p className="text-blue-700 font-medium text-sm">New messages above</p>
+    </div>
+  );
+}
+
+// Add DateHeader component
+function DateHeader({ date }: { date: Date }) {
+  const formattedDate = isToday(date) 
+    ? "Today" 
+    : format(date, 'MMM d');
+    
+  return (
+    <div className="flex justify-center my-4">
+      <div className="px-3 py-1 bg-gray-100 rounded-full text-xs text-gray-500">
+        {formattedDate}
+      </div>
+    </div>
+  );
+}
 
 function ScrollToBottomButton({ visible, onClick, unreadCount = 0 }: { visible: boolean; onClick: (event: React.MouseEvent) => void; unreadCount?: number }) {
   return (
@@ -192,6 +240,22 @@ const isMessageInCurrentTimeRange = (message: Message, messages: Message[]): boo
   return inRange;
 };
 
+// Add ReturnToReplyArrow component at the top level
+// function ReturnToReplyArrow({ onClick }: { onClick: () => void }) {
+//   return (
+//     <button
+//       onClick={onClick}
+//       className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 hover:bg-blue-200 focus:outline-none ml-2 animate-throb"
+//       aria-label="Return to reply"
+//       title="Return to previous message"
+//     >
+//       <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+//         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+//       </svg>
+//     </button>
+//   );
+// }
+
 export default function ChatPage({ params }: { params: { chatId: string } }) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -213,6 +277,11 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   const [unreadMessagesLoaded, setUnreadMessagesLoaded] = useState(false);
   const [testMode, setTestMode] = useState<'top' | 'bottom' | null>(null);
   const [showTestControls, setShowTestControls] = useState(false);
+  const [loadingContextForMessageId, setLoadingContextForMessageId] = useState<string | null>(null);
+  // Add new state for jump history
+  const [jumpHistory, setJumpHistory] = useState<Array<{ sourceId: string, targetId: string }>>([]);
+  // Add state for banner position
+  const [firstUnreadMessageIdForBanner, setFirstUnreadMessageIdForBanner] = useState<string | null>(null);
 
   // Refs
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -234,9 +303,15 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   const fetchPromiseRef = useRef<Promise<void> | null>(null);
   const authCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Add refs for unread state
+  // Refs for anchor scroll adjustment
+  const anchorScrollInfoRef = useRef<{ id: string | null, offset: number }>({ id: null, offset: 0 });
+  const needsScrollAdjustmentRef = useRef<boolean>(false);
+
+  // Refs for unread state
   const unreadCountRef = useRef(0);
   const firstUnreadIdRef = useRef<string | null>(null);
+  // Add ref to track scroll button visibility to avoid circular dependency
+  const showScrollButtonRef = useRef(false);
 
   // Hooks
   const addToBatch = useBatchedMarkAsRead(supabase, setMessages, user);
@@ -279,12 +354,18 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           unreadCount,
           firstUnreadId,
           hasUnreadMessages: unreadCount > 0,
-          currentShowButton: showScrollButton,
+          currentShowButton: showScrollButtonRef.current,
           shouldShowButton: !isNearBottom || unreadCount > 0
         });
 
-        // Show button if we're not near bottom OR if there are unread messages
-        setShowScrollButton(!isNearBottom || unreadCount > 0);
+        // Calculate if button should be visible
+        const shouldShowButton = !isNearBottom || unreadCount > 0;
+        
+        // Only update state if it would actually change, using the ref for comparison
+        if (showScrollButtonRef.current !== shouldShowButton) {
+          showScrollButtonRef.current = shouldShowButton; // Update ref first
+          setShowScrollButton(shouldShowButton); // Then update state
+        }
       };
 
       // Initial check
@@ -298,7 +379,18 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         node.removeEventListener('scroll', handleScroll);
       };
     }
-  }, [messages, scrollContainerReady, unreadCount, firstUnreadId, showScrollButton]);
+  }, [messages, scrollContainerReady, unreadCount, firstUnreadId]); // Remove showScrollButton from deps
+
+  // Update ref when state changes
+  useEffect(() => {
+    showScrollButtonRef.current = showScrollButton;
+  }, [showScrollButton]);
+
+  // Update refs when state changes 
+  useEffect(() => {
+    unreadCountRef.current = unreadCount;
+    firstUnreadIdRef.current = firstUnreadId;
+  }, [unreadCount, firstUnreadId]);
 
   // Add state update lock and fetch lock at the component level
   const stateUpdateLock = useRef(false);
@@ -368,7 +460,62 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
 
   // Helper: Fetch newer messages
   const fetchNewerMessages = useCallback(async () => {
-    if (isLoadingMoreRef.current || !scrollContainerRef.current) return;
+    // This function now just queues the operation.
+    // Add lock checks here before queueing.
+    if (isLoadingMoreRef.current || fetchState.current !== 'idle') {
+      console.log('[PAGINATION_NEWER_QUEUE] Skipping add to queue - already busy or locked.');
+      return; 
+    }
+     if (!hasNewer) { // Use hasNewer state variable directly
+         console.log('[PAGINATION_NEWER_QUEUE] Skipping add to queue - hasNewer is false.');
+         return;
+     }
+    
+    if (!scrollContainerRef.current) return;
+    
+    // Ensure we use the newestCursor if available and hasNewer is true
+    let cursorTime: string | undefined;
+    let cursorMessageId: string | null = null;
+
+    if (hasNewer && newestCursor) {
+      const cursorMsg = messages.find(m => m.id === newestCursor);
+      if (cursorMsg) {
+        cursorTime = cursorMsg.created_at;
+        cursorMessageId = cursorMsg.id;
+        console.log('[PAGINATION_NEWER] Using newestCursor:', { cursorId: newestCursor, cursorTime });
+      } else {
+        // Fallback if cursor message not found in current state, which shouldn't happen if cursors are set correctly.
+        // This might indicate an issue or that the list is empty/too small after a context jump.
+        console.warn('[PAGINATION_NEWER] newestCursor message not found in state. Attempting to use last message in array or aborting.', { newestCursor, messageCount: messages.length });
+        if (messages.length > 0) {
+            // As a robust fallback, try to use the actual last message if newestCursor is somehow desynced
+            // This case should be rare if fetchMessageWithContext sets cursors properly
+            cursorTime = messages[messages.length - 1].created_at;
+            cursorMessageId = messages[messages.length - 1].id;
+            console.log('[PAGINATION_NEWER] Fallback to actual last message in array:', { cursorId: cursorMessageId, cursorTime });
+        } else {
+            console.log('[PAGINATION_NEWER] No messages in state, cannot fetch newer.');
+            setHasNewer(false); // Nothing to page from
+            return; // Cannot proceed if no messages and no valid cursor
+        }
+      }
+    } else if (messages.length > 0) {
+      // Original behavior if hasNewer is false or newestCursor is not set (e.g. initial load from bottom)
+      // However, hasNewer should be true if we expect this to run via scroll trigger for more content
+      cursorTime = messages[messages.length - 1].created_at;
+      cursorMessageId = messages[messages.length - 1].id;
+      console.log('[PAGINATION_NEWER] Using last message in array as cursor (no newestCursor or !hasNewer):', { cursorId: cursorMessageId, cursorTime });
+    } else {
+      console.log('[PAGINATION_NEWER] No messages and no newestCursor, cannot fetch newer.');
+      setHasNewer(false);
+      return;
+    }
+
+    if (!cursorTime) {
+        console.error('[PAGINATION_NEWER] No valid cursorTime to fetch newer messages.');
+        setHasNewer(false); // Cannot proceed
+        return;
+    }
     
     try {
       isLoadingMoreRef.current = true;
@@ -406,10 +553,10 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             return false;
           }
 
-          const cursorTime = lastMessage.created_at;
-          console.log('[PAGINATION] Fetching with cursor:', {
-            cursorTime,
-            lastMessageId: lastMessage.id,
+          // const cursorTime = lastMessage.created_at; // Replaced by logic above
+          console.log('[PAGINATION] Fetching with cursor (fetchNewerMessages):', {
+            cursorTime, // This now comes from newestCursor or fallback
+            lastMessageId: cursorMessageId, // Adjusted to reflect the actual cursor used
             currentMessageCount: messages.length,
             fetchState: fetchState.current
           });
@@ -438,7 +585,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             .select(`
               *,
               is_read,
-              reply_to:messages!reply_to_message_id (
+              reply_to:reply_to_message_id (
                 content,
                 user_id,
                 media_url,
@@ -521,14 +668,17 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             );
 
             // Update cursor with the newest message from the fetched data
-            const newCursor = transformedData[transformedData.length - 1].id;
-            const newCursorTime = transformedData[transformedData.length - 1].created_at;
+            // const newCursor = transformedData[transformedData.length - 1].id; // Corrected: This was only for initial load
+            const newLatestMessageInFetchedBlock = transformedData[transformedData.length - 1];
+            const newCursorId = newLatestMessageInFetchedBlock.id;
+            const newCursorTimestamp = newLatestMessageInFetchedBlock.created_at;
 
-            console.log('[PAGINATION] Updating state:', {
+            console.log('[PAGINATION] Updating state (fetchNewerMessages):', {
               oldMessageCount: messages.length,
               newMessageCount: allMessages.length,
-              oldCursorTime: cursorTime,
-              newCursorTime,
+              oldCursorTime: cursorTime, // The cursor time used for the fetch
+              newCursorTime: newCursorTimestamp, // Time of the new actual newest message from this batch
+              newCursorId: newCursorId, // ID of the new actual newest message
               hasMoreMessages: totalNewerCount > newMessages.length,
               fetchState: fetchState.current
             });
@@ -540,7 +690,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                 resolve();
               }),
               new Promise<void>(resolve => {
-                setNewestCursor(newCursor);
+                setNewestCursor(newCursorId); // Update newestCursor state
                 resolve();
               }),
               new Promise<void>(resolve => {
@@ -580,34 +730,28 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       processFetchQueue();
 
       // After messages are added, restore scroll position
-      requestAnimationFrame(() => {
-        if (container) {
-          const newScrollHeight = container.scrollHeight;
-          const scrollDiff = newScrollHeight - oldScrollHeight;
-          container.scrollTop = oldScrollTop + scrollDiff;
-        }
-      });
+      // This scroll restoration logic might need to be re-evaluated if it fights with explicit scrolling
+      // requestAnimationFrame(() => {
+      //   if (container) {
+      //     const newScrollHeight = container.scrollHeight;
+      //     const scrollDiff = newScrollHeight - oldScrollHeight;
+      //     container.scrollTop = oldScrollTop + scrollDiff;
+      //   }
+      // });
     } finally {
       isLoadingMoreRef.current = false;
     }
-  }, [hasNewer, params.chatId, messages, processFetchQueue]);
+  }, [hasNewer, newestCursor, params.chatId, messages, processFetchQueue, supabase]); // Added newestCursor and supabase
 
   // Helper: Fetch more messages (pagination)
   const fetchMoreMessages = useCallback(async () => {
-    if (!hasMore || loadingMore || !oldestCursor || isLoadingMoreRef.current || fetchState.current !== 'idle') {
-      console.log('[PAGINATION] Skipping fetchMoreMessages:', {
-        hasMore,
-        loadingMore,
-        oldestCursor,
-        isLoadingMore: isLoadingMoreRef.current,
-        fetchState: fetchState.current,
-        currentMessageCount: messages.length,
-        reason: !hasMore ? 'No more messages' : 
-                loadingMore ? 'Already loading' : 
-                !oldestCursor ? 'No cursor' : 
-                isLoadingMoreRef.current ? 'Loading in progress' :
-                fetchState.current !== 'idle' ? 'Fetch state not idle' : 'Unknown'
-      });
+    // Add lock checks here before starting
+    if (isLoadingMoreRef.current || fetchState.current !== 'idle') {
+      console.log('[PAGINATION_OLDER] Skipping fetchMoreMessages - already busy or locked.');
+      return;
+    }
+    if (!hasMore || !oldestCursor) {
+       console.log('[PAGINATION_OLDER] Skipping fetchMoreMessages - no more or no cursor.', { hasMore, oldestCursor });
       return;
     }
     
@@ -625,11 +769,49 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     fetchState.current = 'fetching';
     console.log('[PAGINATION] State transition: idle -> fetching');
 
-    try {
-      // Save current scroll position and height
+    // --- Anchor Scroll: Capture Info --- 
+    let capturedAnchorId: string | null = null;
+    let capturedAnchorOffsetTop: number = 0;
       const container = scrollContainerRef.current;
-      const prevScrollHeight = container?.scrollHeight || 0;
-      const prevScrollTop = container?.scrollTop || 0;
+
+    if (container) {
+      const messageElements = container.querySelectorAll('[data-message-id]');
+      const containerRect = container.getBoundingClientRect();
+      for (let i = 0; i < messageElements.length; i++) {
+        const el = messageElements[i] as HTMLElement;
+        const elRect = el.getBoundingClientRect();
+        // Find first element whose top is within/above viewport top and bottom is below viewport top
+        if (elRect.top <= containerRect.top && elRect.bottom > containerRect.top) {
+          capturedAnchorId = el.getAttribute('data-message-id');
+          // Ensure offset is relative to container, not viewport, if needed. Here using diff from container top.
+          capturedAnchorOffsetTop = elRect.top - containerRect.top; 
+          console.log('[FETCH_MORE_ANCHOR] Captured anchor:', { capturedAnchorId, capturedAnchorOffsetTop });
+          break;
+        }
+      }
+      // Fallback if nothing is crossing the top boundary
+      if (!capturedAnchorId && messageElements.length > 0) {
+          const firstEl = messageElements[0] as HTMLElement;
+           capturedAnchorId = firstEl.getAttribute('data-message-id');
+           capturedAnchorOffsetTop = firstEl.getBoundingClientRect().top - containerRect.top;
+           console.log('[FETCH_MORE_ANCHOR] Using fallback anchor (first element):', { capturedAnchorId, capturedAnchorOffsetTop });
+      }
+
+      // Store captured info in refs immediately
+      anchorScrollInfoRef.current = { id: capturedAnchorId, offset: capturedAnchorOffsetTop };
+      // Signal that adjustment is needed *after* the upcoming state update
+      if (capturedAnchorId) { // Only signal if we actually found an anchor
+           needsScrollAdjustmentRef.current = true; 
+      } else {
+           needsScrollAdjustmentRef.current = false; // Ensure it's false if no anchor found
+      }
+    } else {
+         needsScrollAdjustmentRef.current = false; // Ensure it's false if no container
+    }
+    // --- End Anchor Scroll Capture --- 
+
+    try {
+      // REMOVED prevScrollHeight/prevScrollTop definitions here
 
       // First, get the message at the cursor to verify it exists
       const { data: cursorMessage, error: cursorError } = await supabase
@@ -654,7 +836,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             .select(`
               *,
               is_read,
-              reply_to:messages!reply_to_message_id (
+              reply_to:reply_to_message_id (
                 content,
                 user_id,
                 media_url,
@@ -714,6 +896,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               if (newMessages.length === 0) {
                 console.log('[PAGINATION] No new messages in recovery');
                 setHasMore(false);
+                needsScrollAdjustmentRef.current = false; // No adjustment needed if no messages added
                 return prevMessages;
               }
 
@@ -726,15 +909,6 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                 totalMessageCount: allMessages.length,
                 firstMessageTime: allMessages[0]?.created_at,
                 lastMessageTime: allMessages[allMessages.length - 1]?.created_at
-              });
-
-              // Restore scroll position
-              requestAnimationFrame(() => {
-                if (container) {
-                  const newScrollHeight = container.scrollHeight;
-                  const scrollDiff = newScrollHeight - prevScrollHeight;
-                  container.scrollTop = prevScrollTop + scrollDiff;
-                }
               });
 
               return allMessages;
@@ -790,7 +964,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         .select(`
           *,
           is_read,
-          reply_to:messages!reply_to_message_id (
+          reply_to:reply_to_message_id (
             content,
             user_id,
             media_url,
@@ -874,6 +1048,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           if (newMessages.length === 0) {
             console.log('[PAGINATION] No new messages to add, all were duplicates or empty fetch');
             setHasMore(false);
+            needsScrollAdjustmentRef.current = false; // No adjustment needed if no messages added
             return prevMessages;
           }
 
@@ -893,17 +1068,11 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             duplicateCount: transformedData.length - newMessages.length
           });
 
-          // Restore scroll position after state update
-          requestAnimationFrame(() => {
-            if (container) {
-              const newScrollHeight = container.scrollHeight;
-              const scrollDiff = newScrollHeight - prevScrollHeight;
-              container.scrollTop = prevScrollTop + scrollDiff;
-            }
-          });
+          // --- ENTIRELY REMOVE OLD SCROLL ADJUSTMENT requestAnimationFrame block ---
+          // NO scroll logic inside this callback anymore
 
           return allMessages;
-        });
+        }); // End setMessages
 
         if (transformedData.length > 0) {
           const newCursor = transformedData[0].id;
@@ -957,23 +1126,19 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     });
 
     // Add debounce for intersection observer
-    const debouncedFetch = debounce((isTop: boolean) => {
-      if (isLoadingMoreRef.current || fetchState.current !== 'idle') {
-        console.log('[PAGINATION] Skipping debounced fetch:', {
-          isLoadingMore: isLoadingMoreRef.current,
-          fetchState: fetchState.current
-        });
-        return;
-      }
+    // REMOVED debounce wrapper for faster triggering
+    const handleIntersection = (isTop: boolean) => {
+      // REMOVED shared lock check: if (isLoadingMoreRef.current || fetchState.current !== 'idle') { ... }
+      // Locks will be checked inside the specific fetch functions now
 
       if (isTop && hasMore) {
-        console.log('[PAGINATION] Triggering older messages fetch');
+        console.log('[PAGINATION] Intersection detected for TOP, attempting fetchMoreMessages');
         fetchMoreMessages();
       } else if (!isTop && hasNewer) {
         console.log('[PAGINATION] Triggering newer messages fetch');
         fetchNewerMessages();
       }
-    }, 500); // Increased debounce time to 500ms
+    }; // Removed debounce(..., 100)
 
     // Create new observer
     const observer = new IntersectionObserver(
@@ -1006,14 +1171,15 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           }
 
           if (entry.isIntersecting) {
-            debouncedFetch(isTop);
+            // Call handler directly without debounce
+            handleIntersection(isTop);
           }
         });
       },
       {
         root: scrollContainerRef.current,
-        rootMargin: '300px', // Increased from 200px to 300px to trigger earlier
-        threshold: 0.1
+        rootMargin: '500px', // Reduced from 3000px
+        threshold: 0.1 // Keep threshold low, rootMargin is the main trigger
       }
     );
 
@@ -1034,9 +1200,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       console.log('[PAGINATION] Cleaning up observer');
       observer.disconnect();
       observerRef.current = null;
-      debouncedFetch.cancel();
     };
-  }, [scrollContainerReady, messages.length, hasMore, hasNewer, fetchMoreMessages, fetchNewerMessages, testMode]);
+  }, [scrollContainerReady, messages.length, hasMore, hasNewer, fetchMoreMessages, fetchNewerMessages, testMode, oldestCursor, newestCursor]); // Added oldestCursor, newestCursor
 
   // Update observer targets when messages change
   useEffect(() => {
@@ -1063,12 +1228,12 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
 
     // Observe new targets
     if (!isLoadingMoreRef.current && fetchState.current === 'idle') {
-      if (topMessageRef.current && hasMore) {
-        console.log('[PAGINATION] Setting up top observer');
+      if (topMessageRef.current && hasMore && oldestCursor) { // Ensure oldestCursor exists
+        console.log('[PAGINATION] Setting up top observer for', oldestCursor);
         observerRef.current.observe(topMessageRef.current);
       }
-      if (bottomMessageRef.current && hasNewer) {
-        console.log('[PAGINATION] Setting up bottom observer:', {
+      if (bottomMessageRef.current && hasNewer && newestCursor) { // Ensure newestCursor exists
+        console.log('[PAGINATION] Setting up bottom observer for', newestCursor, {
           hasNewer,
           currentMessageCount: messages.length,
           lastMessageTime: messages[messages.length - 1]?.created_at,
@@ -1077,7 +1242,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         observerRef.current.observe(bottomMessageRef.current);
       }
     }
-  }, [messages.length, hasMore, hasNewer]);
+  }, [messages.length, hasMore, hasNewer, oldestCursor, newestCursor]); // Added oldestCursor, newestCursor
 
   // Scroll position restoration
   useLayoutEffect(() => {
@@ -1240,20 +1405,276 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   const handleReply = useCallback((message: Message) => {
     console.log('[REPLYING] handleReply called with message:', message);
     setReplyingTo(message);
+    // Do not clear jump history when starting a reply
   }, []);
 
-  const handleScrollToMessage = useCallback((messageId: string) => {
+  const CONTEXT_MESSAGE_COUNT = 5;
+
+  const fetchMessageWithContext = useCallback(async (messageId: string): Promise<boolean> => {
+    if (!params.chatId || !supabase) return false;
+    setLoadingContextForMessageId(messageId);
+    console.log('[CONTEXT_FETCH] Starting fetch for message and context:', messageId);
+
+    try {
+      // 1. Fetch the target message
+      const { data: targetMsgData, error: targetMsgError } = await supabase
+        .from('messages')
+        .select(`
+          *,
+          is_read,
+          reply_to:reply_to_message_id (
+            content,
+            user_id,
+            media_url,
+            media_type,
+            is_read
+          )
+        `)
+        .eq('id', messageId)
+        .single();
+
+      if (targetMsgError || !targetMsgData) {
+        console.error('[CONTEXT_FETCH] Error fetching target message or message not found:', messageId, targetMsgError);
+        // TODO: Implement user-facing error (e.g., toast: "Original message not found or has been deleted")
+        setError(`Original message (ID: ${messageId}) not found or could not be loaded.`);
+        return false;
+      }
+      console.log('[CONTEXT_FETCH] Target message fetched:', targetMsgData);
+
+      // 2. Fetch context messages (before and after)
+      const anchorCreatedAt = targetMsgData.created_at;
+      let fetchedMessagesBlock: Message[] = [];
+
+      // Fetch messages before the anchor
+      const { data: beforeMessages, error: beforeError } = await supabase
+        .from('messages')
+        .select(`
+          *,
+          is_read,
+          reply_to:reply_to_message_id (
+            content,
+            user_id,
+            media_url,
+            media_type,
+            is_read
+          )
+        `)
+        .eq('chat_id', params.chatId)
+        .lt('created_at', anchorCreatedAt)
+        .order('created_at', { ascending: false }) // Fetch newest of the older ones first
+        .limit(CONTEXT_MESSAGE_COUNT);
+
+      if (beforeError) console.error('[CONTEXT_FETCH] Error fetching messages before anchor:', beforeError);
+      else if (beforeMessages) fetchedMessagesBlock.push(...beforeMessages.reverse()); // Reverse to maintain chronological order
+
+      // Add the target message itself
+      fetchedMessagesBlock.push(targetMsgData);
+
+      // Fetch messages after the anchor
+      const { data: afterMessages, error: afterError } = await supabase
+        .from('messages')
+        .select(`
+          *,
+          is_read,
+          reply_to:reply_to_message_id (
+            content,
+            user_id,
+            media_url,
+            media_type,
+            is_read
+          )
+        `)
+        .eq('chat_id', params.chatId)
+        .gt('created_at', anchorCreatedAt)
+        .order('created_at', { ascending: true })
+        .limit(CONTEXT_MESSAGE_COUNT);
+
+      if (afterError) console.error('[CONTEXT_FETCH] Error fetching messages after anchor:', afterError);
+      else if (afterMessages) fetchedMessagesBlock.push(...afterMessages);
+      
+      console.log('[CONTEXT_FETCH] Raw block of fetched messages (target + context):', fetchedMessagesBlock.length, 'messages');
+
+      // 3. Fetch profiles for all involved users
+      const userIds = new Set<string>();
+      fetchedMessagesBlock.forEach(msg => {
+        if (msg.user_id) userIds.add(msg.user_id);
+        if (msg.reply_to?.user_id) userIds.add(msg.reply_to.user_id);
+      });
+
+      let profilesMap = new Map();
+      if (userIds.size > 0) {
+        const { data: profilesData, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .in('id', Array.from(userIds));
+        if (profilesError) {
+          console.error('[CONTEXT_FETCH] Error fetching profiles:', profilesError);
+          // Continue without profiles if there's an error, or handle more gracefully
+        } else if (profilesData) {
+          profilesMap = new Map(profilesData.map(p => [p.id, p]));
+        }
+      }
+      console.log('[CONTEXT_FETCH] Profiles map created for', profilesMap.size, 'profiles');
+
+      // 4. Transform messages to include profile data
+      const transformedFetchedBlock = fetchedMessagesBlock.map(msg => ({
+        ...msg,
+        profiles: profilesMap.get(msg.user_id),
+        reply_to: msg.reply_to ? {
+          ...msg.reply_to,
+          profiles: profilesMap.get(msg.reply_to.user_id)
+        } : undefined,
+      }));
+      console.log('[CONTEXT_FETCH] Transformed message block with profiles:', transformedFetchedBlock.length, 'messages');
+
+      // 5. Merge with existing messages and reset pagination cursors/flags
+      setMessages(prevMessages => {
+        const existingMessageIds = new Set(prevMessages.map(m => m.id));
+        // Filter out messages from transformedFetchedBlock that are already in prevMessages
+        const uniqueNewMessagesFromBlock = transformedFetchedBlock.filter(m => !existingMessageIds.has(m.id));
+
+        if (uniqueNewMessagesFromBlock.length === 0 && transformedFetchedBlock.some(m => existingMessageIds.has(m.id))) {
+          // This means the target message and its context were already loaded.
+          // We still need to reset cursors to focus on this existing block.
+          console.log('[CONTEXT_FETCH] Target message and its context were already loaded. Resetting cursors.');
+          
+          // Find the target message in the existing messages to set cursors around its already loaded context
+          // This is a simplified assumption: B_context is essentially the transformedFetchedBlock
+          // If all messages in transformedFetchedBlock are already present, identify their extent in prevMessages.
+          // For now, we'll use the extent of transformedFetchedBlock as B_context.
+          // A more precise way would be to find the min/max created_at from transformedFetchedBlock
+          // and then find the actual messages in prevMessages that correspond to that.
+          // However, for cursor resetting, using the first/last of transformedFetchedBlock is a good start.
+          
+          const sortedPreviouslyFetchedBlock = [...transformedFetchedBlock].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+          if (sortedPreviouslyFetchedBlock.length > 0) {
+            setOldestCursor(sortedPreviouslyFetchedBlock[0].id);
+            setNewestCursor(sortedPreviouslyFetchedBlock[sortedPreviouslyFetchedBlock.length - 1].id);
+            // Assuming there's more to load outside this focused block
+            setHasMore(true); 
+            setHasNewer(true);
+          }
+          return prevMessages; // No change to messages themselves
+        }
+        
+        if (uniqueNewMessagesFromBlock.length === 0) {
+          console.log('[CONTEXT_FETCH] No new unique messages from context fetch to add, and target was not in existing.');
+          return prevMessages;
+        }
+
+
+        console.log('[CONTEXT_FETCH] Adding', uniqueNewMessagesFromBlock.length, 'new unique messages to state.');
+        const allMessages = [...prevMessages, ...uniqueNewMessagesFromBlock].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        
+        // Reset cursors to the boundaries of the newly added B_context (approximated by uniqueNewMessagesFromBlock)
+        // For more accuracy, we should use the sorted uniqueNewMessagesFromBlock if it's guaranteed to be contiguous
+        // or the overall transformedFetchedBlock if we want to ensure cursors are set around the originally intended context window
+        
+        const sortedContextBlock = [...transformedFetchedBlock].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+        if (sortedContextBlock.length > 0) {
+          console.log('[CONTEXT_FETCH] Resetting cursors to fetched context block boundaries.');
+          setOldestCursor(sortedContextBlock[0].id);
+          setNewestCursor(sortedContextBlock[sortedContextBlock.length - 1].id);
+          setHasMore(true); // Optimistically assume there's more outside this loaded context
+          setHasNewer(true); // Optimistically assume there's more outside this loaded context
+        }
+        return allMessages;
+      });
+      
+      return true;
+    } catch (err) {
+      console.error('[CONTEXT_FETCH] General error in fetchMessageWithContext:', err);
+      setError('Failed to load the context for the message.');
+      return false;
+    } finally {
+      setLoadingContextForMessageId(null);
+      console.log('[CONTEXT_FETCH] Finished fetch for message and context:', messageId);
+    }
+  }, [params.chatId, supabase, setMessages, setLoadingContextForMessageId, setError, setOldestCursor, setNewestCursor]);
+
+
+  const handleScrollToMessage = useCallback(async (messageId: string) => {
+    // Reset adjustment flag before handling this specific scroll action
+    needsScrollAdjustmentRef.current = false; 
+
+    if (loadingContextForMessageId === messageId) {
+      console.log('[SCROLL_HANDLER] Already loading context for this message, aborting scroll attempt:', messageId);
+      return;
+    }
+    // Prevent trying to load context if another context load is already in progress for ANY message.
+    // For a more sophisticated approach, a queue could be implemented, but this prevents concurrent context loads.
+    if (loadingContextForMessageId && loadingContextForMessageId !== messageId) {
+        console.log('[SCROLL_HANDLER] Another message context is currently loading, aborting scroll attempt for:', messageId);
+        return;
+    }
+
     const el = document.getElementById(`message-${messageId}`);
     if (el) {
+      console.log('[SCROLL_HANDLER] Element found, scrolling to:', messageId);
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+      console.log('[SCROLL_HANDLER] Element not found for messageId:', messageId, 'Attempting to fetch context.');
+      const success = await fetchMessageWithContext(messageId);
+      if (success) {
+        // Wait for DOM update
+        requestAnimationFrame(() => {
+          const newEl = document.getElementById(`message-${messageId}`);
+          if (newEl) {
+            console.log('[SCROLL_HANDLER] Element found after context fetch, scrolling to:', messageId);
+            newEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+            console.error('[SCROLL_HANDLER] Failed to find element for scrolling even after context fetch:', messageId);
+            // setError might be too aggressive here, perhaps a console warning is enough.
+          }
+        });
+      } else {
+        console.log('[SCROLL_HANDLER] Context fetch failed or did not complete successfully for messageId:', messageId);
+        // Error state is handled within fetchMessageWithContext
+      }
     }
-  }, []);
+  }, [fetchMessageWithContext, loadingContextForMessageId]);
 
   const retryMessage = useCallback((messageId: string) => {
     // Implement retry logic here
     console.log('Retrying message:', messageId);
   }, []);
 
+  // Add initiateReplyJump function
+  const initiateReplyJump = useCallback((currentMessageId: string, originalTargetId: string) => {
+    console.log('[REPLY_CHAIN] Initiating reply jump:', { 
+      from: currentMessageId, 
+      to: originalTargetId,
+      currentJumpHistory: jumpHistory
+    });
+    
+    // Create new jump and add to history
+    const newJump = { sourceId: currentMessageId, targetId: originalTargetId };
+    setJumpHistory(prevHistory => [...prevHistory, newJump]);
+    
+    // Use existing scroll function to handle pagination and scrolling
+    handleScrollToMessage(originalTargetId);
+  }, [handleScrollToMessage, jumpHistory]);
+
+  // Add executeReturnFromReply function
+  const executeReturnFromReply = useCallback(() => {
+    if (jumpHistory.length === 0) {
+      console.log('[REPLY_CHAIN] No jump history to return from');
+      return;
+    }
+    
+    // Get the last jump
+    const lastJump = jumpHistory[jumpHistory.length - 1];
+    console.log('[REPLY_CHAIN] Executing return from reply:', { to: lastJump.sourceId, from: lastJump.targetId });
+    
+    // Scroll to source of the last jump
+    handleScrollToMessage(lastJump.sourceId);
+    
+    // Pop the last jump off the stack
+    setJumpHistory(prevHistory => prevHistory.slice(0, -1));
+  }, [jumpHistory, handleScrollToMessage]);
+
+  // Clear jump history when user sends a new message
   const sendMessage = useCallback(async (content: string, mediaUrl?: string, mediaType?: string) => {
     if (!user) return;
     
@@ -1272,6 +1693,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       const { error } = await supabase.from('messages').insert([messageData]);
       if (error) throw error;
 
+      // Clear jump history when sending a new message
+      setJumpHistory([]);
       setReplyingTo(null);
     } catch (err) {
       console.error('Error sending message:', err);
@@ -1386,7 +1809,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         .select(`
           *,
           is_read,
-          reply_to:messages!reply_to_message_id (
+          reply_to:reply_to_message_id (
             content,
             user_id,
             media_url,
@@ -1612,7 +2035,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             .select(`
               *,
               is_read,
-              reply_to:messages!reply_to_message_id (
+              reply_to:reply_to_message_id (
                 content,
                 user_id,
                 media_url,
@@ -1632,6 +2055,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           }
 
           const { data, error } = await query;
+
+          console.log('[INITIAL FETCH RAW DATA]', data); // Check this log
 
           if (error) {
             console.error('[INITIAL] Error fetching messages:', error);
@@ -1686,6 +2111,22 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               } : undefined
             }));
 
+            // Check for unread messages
+            const unreadMessages = transformedData.filter(m => !m.is_read && m.user_id !== user.id);
+            if (unreadMessages.length > 0) {
+              console.log('[INITIAL] Found unread messages:', unreadMessages.length);
+              
+              // Set first unread message ID
+              const firstUnreadMsg = unreadMessages[0];
+              const lastUnreadMsg = unreadMessages[unreadMessages.length - 1];
+              setFirstUnreadId(firstUnreadMsg.id);
+              setUnreadCount(unreadMessages.length);
+              
+              // Set banner position at the last unread message
+              console.log('[INITIAL] Setting banner position at first load:', lastUnreadMsg.id);
+              setFirstUnreadMessageIdForBanner(lastUnreadMsg.id);
+            }
+
             // Sort messages based on test mode
             const sortedMessages = testMode === 'top' 
               ? transformedData 
@@ -1728,6 +2169,16 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         })();
 
         await fetchPromiseRef.current;
+        
+        // After the initial fetch is complete, check for unread messages and set banner position
+        if (isMounted) {
+          setTimeout(() => {
+            if (unreadCount > 0 && firstUnreadId && !firstUnreadMessageIdForBanner) {
+              console.log('[INITIAL] Setting banner position at first unread message:', firstUnreadId);
+              setFirstUnreadMessageIdForBanner(firstUnreadId);
+            }
+          }, 300); // Small delay to ensure state is updated
+        }
       } catch (err) {
         console.error('[INITIAL] Error in fetchInitialMessages:', err);
         setError('Failed to load messages');
@@ -2180,8 +2631,14 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   // Update handleScrollButtonClick to ensure DOM is ready
   const handleScrollButtonClick = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault();
+    // Reset adjustment flag before handling this specific scroll action
+    needsScrollAdjustmentRef.current = false; 
+
     const container = scrollContainerRef.current;
     if (!container) return;
+
+    // If clicking scroll to bottom button, clear jump history
+    setJumpHistory([]);
 
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
 
@@ -2244,7 +2701,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             .select(`
               *,
               is_read,
-              reply_to:messages!reply_to_message_id (
+              reply_to:reply_to_message_id (
                 content,
                 user_id,
                 media_url,
@@ -2403,7 +2860,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             .select(`
               *,
               is_read,
-              reply_to:messages!reply_to_message_id (
+              reply_to:reply_to_message_id (
                 content,
                 user_id,
                 media_url,
@@ -2601,9 +3058,12 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               setFirstUnreadId(firstUnreadIdRef.current);
             }
 
+            // Note: We don't update firstUnreadMessageIdForBanner here
+            // This ensures the banner stays fixed at its original position
             console.log('[REALTIME] Unread state updated:', {
               newUnreadCount: unreadCountRef.current,
-              firstUnreadId: firstUnreadIdRef.current
+              firstUnreadId: firstUnreadIdRef.current,
+              bannerPositionId: firstUnreadMessageIdForBanner // Banner position remains unchanged
             });
           }
 
@@ -2716,6 +3176,48 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     firstUnreadIdRef.current = firstUnreadId;
   }, [unreadCount, firstUnreadId]);
 
+  // Set the first unread message ID for banner when unread messages are detected
+  useEffect(() => {
+    // Only set the banner position if we have unread messages and it hasn't been set yet
+    if (unreadCount > 0 && firstUnreadId && !firstUnreadMessageIdForBanner) {
+      console.log('[UNREAD_BANNER] Setting banner position at message:', firstUnreadId, {
+        unreadCount,
+        messagesLoaded: messages.length,
+        loadingState: loading
+      });
+      setFirstUnreadMessageIdForBanner(firstUnreadId);
+    }
+  }, [unreadCount, firstUnreadId, firstUnreadMessageIdForBanner, messages.length, loading]);
+
+  // Add a fallback effect that runs after loading is complete to ensure the banner is set
+  useEffect(() => {
+    if (!loading && messages.length > 0 && !firstUnreadMessageIdForBanner) {
+      // Check if there are any unread messages in the loaded messages
+      const unreadMessages = messages.filter(m => !m.is_read && m.user_id !== user?.id);
+      if (unreadMessages.length > 0) {
+        const firstUnread = unreadMessages[0];
+        const lastUnread = unreadMessages[unreadMessages.length - 1];
+        console.log('[UNREAD_BANNER] Fallback: Found unread messages after loading:', {
+          count: unreadMessages.length,
+          firstUnreadId: firstUnread.id,
+          lastUnreadId: lastUnread.id,
+          messageCount: messages.length
+        });
+        
+        // Set the unread count and first unread ID if not already set
+        if (unreadCount === 0) {
+          setUnreadCount(unreadMessages.length);
+        }
+        if (!firstUnreadId) {
+          setFirstUnreadId(firstUnread.id);
+        }
+        
+        // Set the banner position to the last unread message
+        setFirstUnreadMessageIdForBanner(lastUnread.id);
+      }
+    }
+  }, [loading, messages, firstUnreadMessageIdForBanner, unreadCount, firstUnreadId, user?.id]);
+
   // Add effect to handle marking messages as read
   useEffect(() => {
     if (!user || !firstUnreadId) return;
@@ -2767,6 +3269,86 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     }
   }, [user, firstUnreadId, params.chatId]);
 
+  // Add useEffect for scroll adjustment after upward pagination
+  useEffect(() => {
+    // Check if adjustment is needed (set by fetchMoreMessages)
+    if (needsScrollAdjustmentRef.current && scrollContainerRef.current) {
+      const { id: anchorId, offset: anchorOffsetTop } = anchorScrollInfoRef.current;
+      const container = scrollContainerRef.current;
+      // Make a local copy of the flag and reset the ref immediately
+      // to prevent the effect from running multiple times for the same adjustment
+      needsScrollAdjustmentRef.current = false; 
+
+      if (anchorId) {
+        // Wait for next frame to ensure DOM is updated after messages render
+        requestAnimationFrame(() => {
+          const newAnchorEl = document.getElementById(`message-${anchorId}`);
+          if (newAnchorEl && container) { // Re-check container ref just in case
+            const newAnchorOffsetFromScrollParent = newAnchorEl.offsetTop;
+            const targetScrollTop = newAnchorOffsetFromScrollParent - anchorOffsetTop;
+            console.log('[ANCHOR_EFFECT] Restoring scroll:', { anchorId, currentScrollTop: container.scrollTop, targetScrollTop });
+            // Only adjust if the difference is significant to avoid minor jitter
+            if (Math.abs(container.scrollTop - targetScrollTop) > 1) { 
+                container.scrollTop = targetScrollTop;
+            }
+          } else {
+             console.warn('[ANCHOR_EFFECT] Anchor element or container not found:', anchorId);
+          }
+          // Clear anchor info after attempting adjustment
+          anchorScrollInfoRef.current = { id: null, offset: 0 }; 
+        });
+      } else {
+          console.log('[ANCHOR_EFFECT] No anchorId found for adjustment.');
+          // Clear anchor info even if no ID was found
+           anchorScrollInfoRef.current = { id: null, offset: 0 };
+      }
+
+      // Resetting the flag is now done at the start of the if block.
+    }
+  }, [messages]); // Run this effect whenever messages array changes
+
+  // useEffect
+  useEffect(() => {
+    addThrobAnimation();
+
+    // Reset banner state when chat changes
+    return () => {
+      setFirstUnreadMessageIdForBanner(null);
+    };
+  }, [params.chatId]);
+
+  // Update the unread state effect to always check for banner position
+  useEffect(() => {
+    if (!loading && messages.length > 0) {
+      // Find unread messages that aren't from the current user
+      const unreadMessages = messages.filter(m => !m.is_read && m.user_id !== user?.id);
+      
+      console.log('[UNREAD_CHECK] Checking for unread messages:', {
+        unreadCount: unreadMessages.length,
+        hasPositionedBanner: !!firstUnreadMessageIdForBanner,
+        totalMessages: messages.length
+      });
+      
+      if (unreadMessages.length > 0) {
+        // Update unread count and first unread ID if needed
+        if (unreadCount !== unreadMessages.length) {
+          setUnreadCount(unreadMessages.length);
+        }
+        
+        // Set the first unread message ID if it's not already set
+        if (!firstUnreadId) {
+          setFirstUnreadId(unreadMessages[0].id);
+        }
+        
+        // Set the banner position if it's not already set
+        if (!firstUnreadMessageIdForBanner) {
+          console.log('[UNREAD_CHECK] Setting banner position:', unreadMessages[unreadMessages.length - 1].id);
+          setFirstUnreadMessageIdForBanner(unreadMessages[unreadMessages.length - 1].id);
+        }
+      }
+    }
+  }, [loading, messages, user?.id, unreadCount, firstUnreadId, firstUnreadMessageIdForBanner]);
+
   if (loading) {
     return <div className="p-4">Loading messages...</div>;
   }
@@ -2781,25 +3363,52 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           <p>{error}</p>
         </div>
       )}
+      {/* Debug output for banner state */}
+      {process.env.NODE_ENV !== 'production' && (
+        <div className="fixed top-0 left-0 bg-white bg-opacity-80 z-50 p-2 text-xs font-mono max-w-xs overflow-auto" style={{ maxHeight: '200px' }}>
+          <div>firstUnreadId: {firstUnreadId || 'none'}</div>
+          <div>unreadCount: {unreadCount}</div>
+          <div>bannerPos (lastUnread): {firstUnreadMessageIdForBanner || 'none'}</div>
+          <div>msgCount: {messages.length}</div>
+        </div>
+      )}
       <div ref={handleScrollContainerRef} className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto space-y-4 px-4 pb-2">
-          {messages.map((message, idx) => {
+          {(() => {
+            // Track the current message date to detect date changes
+            let currentMessageDate: Date | null = null;
+            
+            return messages.map((message, idx) => {
             const isFirst = idx === 0;
             const isLast = idx === messages.length - 1;
             
-            return (
-              <div
-                key={message.id}
+              // Determine if this message is the current target for top or bottom observers
+              const isTopObserverTarget = message.id === oldestCursor && hasMore;
+              const isBottomObserverTarget = message.id === newestCursor && hasNewer;
+              
+              // Check if this message is a target in the jump history
+              const isReplyJumpTarget = jumpHistory.length > 0 && jumpHistory[jumpHistory.length - 1].targetId === message.id;
+              
+              // Check if banner should be shown before this message
+              const showBannerBeforeThisMessage = message.id === firstUnreadMessageIdForBanner;
+              
+              // Check if we need to show a date header
+              const messageDate = startOfDay(new Date(message.created_at));
+              const showDateHeader = !currentMessageDate || !isSameDay(messageDate, currentMessageDate);
+              
+              // Update the current date tracker
+              currentMessageDate = messageDate;
+              
+              // Prepare the message element
+              const messageElement = (
+                <div
                 data-message-id={message.id}
-                ref={isFirst ? (el => { 
-                  topMessageRef.current = el; 
+                  ref={el => {
+                    if (isTopObserverTarget) topMessageRef.current = el;
+                    if (isBottomObserverTarget) bottomMessageRef.current = el;
+                    // Keep existing observeMessage for read status, but it should not be the primary pagination trigger ref
                   observeMessage(el, message.id); 
-                }) : 
-                isLast ? (el => { 
-                  bottomMessageRef.current = el; 
-                  observeMessage(el, message.id); 
-                }) :
-                (el => observeMessage(el, message.id))}
+                  }}
                 id={`message-${message.id}`}
               >
                 <MessageBubble
@@ -2809,10 +3418,29 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                   onRetry={() => retryMessage(message.id)}
                   onReply={handleReply}
                   onScrollToMessage={handleScrollToMessage}
+                    // Add new props for reply chain navigation
+                    onInitiateReplyJump={initiateReplyJump}
+                    isReplyJumpTarget={isReplyJumpTarget}
+                    onReturnFromReply={executeReturnFromReply}
                 />
               </div>
             );
-          })}
+              
+              // Log if showing banner
+              if (showBannerBeforeThisMessage) {
+                console.log('[RENDER] Showing banner above last unread message:', message.id);
+              }
+              
+              // Return elements with date header, banner, and message in the correct order
+              return (
+                <React.Fragment key={message.id}>
+                  {showDateHeader && <DateHeader date={messageDate} />}
+                  {showBannerBeforeThisMessage && <UnreadBanner key={`banner-${message.id}`} />}
+                  {messageElement}
+                </React.Fragment>
+              );
+            });
+          })()}
           <div ref={messagesEndRef} />
         </div>
         <ScrollToBottomButton
