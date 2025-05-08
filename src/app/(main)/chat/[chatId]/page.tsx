@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import MessageBubble from '@/components/MessageBubble';
 import MessageInput from '@/components/MessageInput';
+import TypingIndicator from '@/components/TypingIndicator';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { Message } from '@/types/message';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
@@ -3536,6 +3537,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               </button>
             </div>
           )}
+          {/* Add typing indicator component */}
+          <TypingIndicator chatId={params.chatId} currentUser={user} />
           <MessageInput onSend={sendMessage} chatId={params.chatId} />
         </div>
       </div>

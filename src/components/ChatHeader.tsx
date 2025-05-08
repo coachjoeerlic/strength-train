@@ -4,6 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { ArrowLeft, Users } from 'lucide-react';
+import { subscribeToPresence, setActiveChat } from '@/lib/presenceService';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 interface ChatHeaderProps {
   chatId: string;
@@ -13,8 +15,40 @@ interface ChatHeaderProps {
 export default function ChatHeader({ chatId, onOpenModal }: ChatHeaderProps) {
   const [chatTitle, setChatTitle] = useState<string>('Chat');
   const [memberCount, setMemberCount] = useState<number>(0);
+  const [onlineCount, setOnlineCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [presenceChannel, setPresenceChannel] = useState<RealtimeChannel | null>(null);
   const router = useRouter();
+
+  // Set this chat as active for presence tracking
+  useEffect(() => {
+    setActiveChat(chatId);
+    
+    return () => {
+      // Clear active chat when component unmounts
+      setActiveChat(null);
+    };
+  }, [chatId]);
+  
+  // Subscribe to presence updates
+  useEffect(() => {
+    if (!chatId) return;
+    
+    console.log('[ChatHeader] Setting up presence subscription for chat:', chatId);
+    
+    // Set up presence subscription
+    const channel = subscribeToPresence(chatId, (presenceData) => {
+      console.log('[ChatHeader] Presence data updated:', presenceData);
+      setOnlineCount(presenceData.length);
+    });
+    
+    setPresenceChannel(channel);
+    
+    return () => {
+      console.log('[ChatHeader] Cleaning up presence subscription');
+      channel.unsubscribe();
+    };
+  }, [chatId]);
 
   useEffect(() => {
     const fetchChatDetails = async () => {
@@ -120,7 +154,14 @@ export default function ChatHeader({ chatId, onOpenModal }: ChatHeaderProps) {
             title="View chat members"
           >
             <Users className="h-4 w-4" />
-            <span className="text-sm">{memberCount}</span>
+            <span className="text-sm">
+              {memberCount}{" "}
+              {onlineCount > 0 && (
+                <span className="text-green-500 ml-1">
+                  ({onlineCount} online)
+                </span>
+              )}
+            </span>
           </button>
         </div>
       </div>

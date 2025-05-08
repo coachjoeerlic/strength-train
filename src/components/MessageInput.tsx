@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, FormEvent, useRef } from 'react';
+import { useState, FormEvent, useRef, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { setTypingStatus, removeTypingStatus, cleanupTyping } from '@/lib/typingService';
+import { useAuth } from '@/lib/AuthContext';
 
 interface MessageInputProps {
   onSend: (content: string, mediaUrl?: string, mediaType?: 'image' | 'video' | 'gif') => void;
@@ -18,6 +20,7 @@ interface GifResult {
 }
 
 export default function MessageInput({ onSend, chatId }: MessageInputProps) {
+  const { user } = useAuth();
   const [message, setMessage] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -28,12 +31,38 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout>();
 
+  // Clean up typing status when component unmounts
+  useEffect(() => {
+    return () => {
+      if (user?.id) {
+        cleanupTyping(user.id, chatId);
+      }
+    };
+  }, [user?.id, chatId]);
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!message.trim() && !isUploading) return;
 
+    // Clear typing status when sending a message
+    if (user?.id) {
+      removeTypingStatus(user.id, chatId);
+    }
+
     onSend(message);
     setMessage('');
+  };
+
+  // Handle typing detection
+  const handleTyping = () => {
+    if (user?.id) {
+      setTypingStatus(user.id, chatId);
+    }
+  };
+
+  const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMessage(e.target.value);
+    handleTyping();
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,6 +111,11 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
       let mediaType: 'image' | 'video' | 'gif' = file.type.startsWith('image/') ? 'image' : 'video';
       if (file.type === 'image/gif') {
         mediaType = 'gif';
+      }
+
+      // Clear typing status when sending a message
+      if (user?.id) {
+        removeTypingStatus(user.id, chatId);
       }
 
       // Send message with media
@@ -145,6 +179,11 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
   };
 
   const handleGifSelect = (gif: GifResult) => {
+    // Clear typing status when sending a message
+    if (user?.id) {
+      removeTypingStatus(user.id, chatId);
+    }
+    
     onSend(message, gif.media_formats.gif.url, 'gif');
     setMessage('');
     setIsGifSearchOpen(false);
@@ -207,7 +246,12 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
       <input
         type="text"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={handleMessageChange}
+          onBlur={() => {
+            if (user?.id && !message.trim()) {
+              removeTypingStatus(user.id, chatId);
+            }
+          }}
         placeholder="Type a message..."
           className="flex-1 min-w-0 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={isUploading}

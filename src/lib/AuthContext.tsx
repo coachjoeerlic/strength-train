@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
+import { initPresence } from './presenceService';
 
 type AuthContextType = {
   user: User | null;
@@ -16,6 +17,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Initialize presence tracking
+  useEffect(() => {
+    let presenceCleanup: (() => void) | undefined;
+    
+    if (user?.id) {
+      console.log('[AuthContext] Initializing presence tracking for user:', user.id);
+      presenceCleanup = initPresence(user.id);
+    }
+    
+    return () => {
+      if (presenceCleanup) {
+        console.log('[AuthContext] Cleaning up presence tracking');
+        presenceCleanup();
+      }
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     const initializeAuth = async () => {
