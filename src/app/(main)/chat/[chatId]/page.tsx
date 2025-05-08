@@ -256,6 +256,10 @@ const isMessageInCurrentTimeRange = (message: Message, messages: Message[]): boo
 //   );
 // }
 
+// Import the new components
+import ChatHeader from '@/components/ChatHeader';
+import UserModal from '@/components/UserModal';
+
 export default function ChatPage({ params }: { params: { chatId: string } }) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -282,6 +286,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   const [jumpHistory, setJumpHistory] = useState<Array<{ sourceId: string, targetId: string }>>([]);
   // Add state for banner position
   const [firstUnreadMessageIdForBanner, setFirstUnreadMessageIdForBanner] = useState<string | null>(null);
+  // Add state for modal visibility
+  const [modalVisible, setModalVisible] = useState(false);
 
   // Refs
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -3350,38 +3356,68 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   }, [loading, messages, user?.id, unreadCount, firstUnreadId, firstUnreadMessageIdForBanner]);
 
   if (loading) {
-    return <div className="p-4">Loading messages...</div>;
+    return (
+      <div className="h-screen flex flex-col">
+        <ChatHeader 
+          chatId={params.chatId}
+          onOpenModal={() => setModalVisible(true)}
+        />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center">
+            <div className="w-8 h-8 border-t-2 border-blue-500 rounded-full animate-spin mb-2"></div>
+            <p className="text-gray-600">Loading messages...</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <main className="h-screen flex flex-col">
-      <TestModeToggle />
-      <TestControls />
-      <TestModeIndicator />
+      {/* Chat Header */}
+      <ChatHeader 
+        chatId={params.chatId}
+        onOpenModal={() => setModalVisible(true)}
+      />
+      
+      {/* Remove debug components - TestModeToggle, TestControls, TestModeIndicator */}
+      {/* Show only when in development and specifically enabled - can be controlled by adding a query param or env var */}
+      {false && (
+        <>
+          <TestModeToggle />
+          <TestControls />
+          <TestModeIndicator />
+        </>
+      )}
+      
       {error && (
         <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4" role="alert">
           <p>{error}</p>
         </div>
       )}
-      {/* Debug output for banner state */}
-      {process.env.NODE_ENV !== 'production' && (
-        <div className="fixed top-0 left-0 bg-white bg-opacity-80 z-50 p-2 text-xs font-mono max-w-xs overflow-auto" style={{ maxHeight: '200px' }}>
+      
+      {/* Remove debug output */}
+      {/* Show only when in development and specifically enabled */}
+      {false && process.env.NODE_ENV !== 'production' && (
+        <div className="fixed top-16 left-0 bg-white bg-opacity-80 z-30 p-2 text-xs font-mono max-w-xs overflow-auto" style={{ maxHeight: '200px' }}>
           <div>firstUnreadId: {firstUnreadId || 'none'}</div>
           <div>unreadCount: {unreadCount}</div>
           <div>bannerPos (lastUnread): {firstUnreadMessageIdForBanner || 'none'}</div>
           <div>msgCount: {messages.length}</div>
         </div>
       )}
+      
+      {/* Message container */}
       <div ref={handleScrollContainerRef} className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto space-y-4 px-4 pb-2">
+        <div className="max-w-2xl mx-auto space-y-4 px-4 pb-2 pt-2">
           {(() => {
             // Track the current message date to detect date changes
             let currentMessageDate: Date | null = null;
             
             return messages.map((message, idx) => {
-            const isFirst = idx === 0;
-            const isLast = idx === messages.length - 1;
-            
+              const isFirst = idx === 0;
+              const isLast = idx === messages.length - 1;
+              
               // Determine if this message is the current target for top or bottom observers
               const isTopObserverTarget = message.id === oldestCursor && hasMore;
               const isBottomObserverTarget = message.id === newestCursor && hasNewer;
@@ -3402,34 +3438,29 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               // Prepare the message element
               const messageElement = (
                 <div
-                data-message-id={message.id}
+                  data-message-id={message.id}
                   ref={el => {
                     if (isTopObserverTarget) topMessageRef.current = el;
                     if (isBottomObserverTarget) bottomMessageRef.current = el;
-                    // Keep existing observeMessage for read status, but it should not be the primary pagination trigger ref
-                  observeMessage(el, message.id); 
+                    // Keep existing observeMessage for read status
+                    observeMessage(el, message.id); 
                   }}
-                id={`message-${message.id}`}
-              >
-                <MessageBubble
-                  message={message}
-                  isOwnMessage={message.user_id === user?.id}
-                  ownUsername={currentUserProfile?.username || user?.email || 'Me'}
-                  onRetry={() => retryMessage(message.id)}
-                  onReply={handleReply}
-                  onScrollToMessage={handleScrollToMessage}
-                    // Add new props for reply chain navigation
+                  id={`message-${message.id}`}
+                >
+                  <MessageBubble
+                    message={message}
+                    isOwnMessage={message.user_id === user?.id}
+                    ownUsername={currentUserProfile?.username || user?.email || 'Me'}
+                    onRetry={() => retryMessage(message.id)}
+                    onReply={handleReply}
+                    onScrollToMessage={handleScrollToMessage}
+                    // Add props for reply chain navigation
                     onInitiateReplyJump={initiateReplyJump}
                     isReplyJumpTarget={isReplyJumpTarget}
                     onReturnFromReply={executeReturnFromReply}
-                />
-              </div>
-            );
-              
-              // Log if showing banner
-              if (showBannerBeforeThisMessage) {
-                console.log('[RENDER] Showing banner above last unread message:', message.id);
-              }
+                  />
+                </div>
+              );
               
               // Return elements with date header, banner, and message in the correct order
               return (
@@ -3449,6 +3480,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           unreadCount={unreadCount}
         />
       </div>
+      
+      {/* Message input area */}
       <div className="flex-shrink-0 border-t bg-white">
         <div className="max-w-2xl mx-auto px-4 py-2">
           {replyingTo && (
@@ -3506,6 +3539,14 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           <MessageInput onSend={sendMessage} chatId={params.chatId} />
         </div>
       </div>
+      
+      {/* Add UserModal component */}
+      {modalVisible && (
+        <UserModal 
+          chatId={params.chatId}
+          onClose={() => setModalVisible(false)}
+        />
+      )}
     </main>
   );
 } 
