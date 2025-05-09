@@ -1,7 +1,9 @@
-import { Message } from '@/types/message';
+import { Message, ReactionSummary } from '@/types/message';
 import { formatDistanceToNow, format } from 'date-fns';
 import { useState, useRef, useEffect } from 'react';
 import Image from 'next/image';
+import { useAuth } from '@/lib/AuthContext';
+import { addReaction, removeReaction } from '@/lib/reactionService';
 
 export interface MessageBubbleProps {
   message: Message;
@@ -26,6 +28,8 @@ export default function MessageBubble({
   isReplyJumpTarget = false,
   onReturnFromReply
 }: MessageBubbleProps) {
+  const { user } = useAuth();
+
   const bubbleClasses = isOwnMessage
     ? 'bg-blue-500 text-white ml-auto'
     : 'bg-gray-200 text-gray-800';
@@ -154,6 +158,30 @@ export default function MessageBubble({
     }
   };
 
+  const handleToggleReaction = async (emoji: string) => {
+    if (!user || !message) {
+      console.error("User or message not found, cannot react");
+      return;
+    }
+
+    const existingReaction = message.reactions?.find(
+      r => r.emoji === emoji && r.reactedByCurrentUser
+    );
+
+    try {
+      if (existingReaction) {
+        await removeReaction(message.id, user.id, emoji);
+        // UI will update when message.reactions prop changes from parent
+      } else {
+        await addReaction(message.id, user.id, emoji);
+        // UI will update when message.reactions prop changes from parent
+      }
+      // TODO: Consider an optimistic update or a callback to parent to refresh reactions faster
+    } catch (error) {
+      console.error("Failed to toggle reaction for emoji:", emoji, error);
+    }
+  };
+
   return (
     <div className={`flex flex-col ${isOwnMessage ? 'items-end' : 'items-start'}`}>
       <div className="text-xs text-gray-500 mb-1">
@@ -244,6 +272,29 @@ export default function MessageBubble({
             <div className={`text-xs mt-1 ${isOwnMessage ? 'text-blue-100' : 'text-gray-500'}`}>
               {format(new Date(message.created_at), 'h:mm a')}
             </div>
+
+            {/* Reactions Display - START */}
+            {message.reactions && message.reactions.length > 0 && (
+              <div className={`flex gap-1 mt-1 flex-wrap ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
+                {message.reactions.map((reaction: ReactionSummary) => (
+                  <button 
+                    key={reaction.emoji}
+                    onClick={() => handleToggleReaction(reaction.emoji)}
+                    className={`text-xs px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors
+                                ${reaction.reactedByCurrentUser 
+                                  ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                                  : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
+                    title={`${reaction.reactedByCurrentUser ? 'Remove' : 'Add'} ${reaction.emoji} reaction`}
+                  >
+                    <span>{reaction.emoji}</span>
+                    <span className={`${reaction.reactedByCurrentUser ? 'text-blue-100' : 'text-gray-700 dark:text-gray-300'}`}>
+                      {reaction.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* Reactions Display - END */}
           </div>
         </div>
         

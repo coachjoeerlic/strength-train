@@ -21,4 +21,12 @@ export type Message = {
     username: string;
   };
   is_read: boolean;
+  reactions?: ReactionSummary[];
+};
+
+export type ReactionSummary = {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser: boolean;
+  userIds: string[];
 }; 
