@@ -12,6 +12,7 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import debounce from 'lodash.debounce';
 import React from 'react';
 import { isToday, format, startOfDay, isSameDay } from 'date-fns';
+import { addReaction, removeReaction } from '@/lib/reactionService';
 
 // Add throb animation via a style tag in the component
 function addThrobAnimation() {
@@ -62,7 +63,7 @@ function DateHeader({ date }: { date: Date }) {
 function ScrollToBottomButton({ visible, onClick, unreadCount = 0 }: { visible: boolean; onClick: (event: React.MouseEvent) => void; unreadCount?: number }) {
   return (
     <button
-      className={`fixed z-30 transition-opacity duration-300 bottom-20 right-6 bg-blue-500 text-white p-3 rounded-full shadow-lg hover:bg-blue-600 focus:outline-none ${visible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+      className={`fixed z-30 transition-opacity duration-300 bottom-32 right-6 bg-blue-500 text-white p-3 rounded-full shadow-lg hover:bg-blue-600 focus:outline-none ${visible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
       style={{ pointerEvents: visible ? 'auto' : 'none' }}
       onClick={(e) => onClick(e)}
       aria-label="Scroll to bottom or unread"
@@ -260,6 +261,8 @@ const isMessageInCurrentTimeRange = (message: Message, messages: Message[]): boo
 // Import the new components
 import ChatHeader from '@/components/ChatHeader';
 import UserModal from '@/components/UserModal';
+import UserProfileModal, { UserProfile } from '@/components/UserProfileModal'; // Import new modal and its Profile type
+import SuperemojiMenu from '@/components/SuperemojiMenu'; // Added
 
 export default function ChatPage({ params }: { params: { chatId: string } }) {
   const { user } = useAuth();
@@ -288,7 +291,35 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   // Add state for banner position
   const [firstUnreadMessageIdForBanner, setFirstUnreadMessageIdForBanner] = useState<string | null>(null);
   // Add state for modal visibility
-  const [modalVisible, setModalVisible] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false); // Existing modal for chat members
+  const [isUserProfileModalOpen, setIsUserProfileModalOpen] = useState(false);
+  const [selectedUserProfile, setSelectedUserProfile] = useState<UserProfile | null>(null);
+  const [userProfileModalLoading, setUserProfileModalLoading] = useState(false);
+  const [userProfileModalError, setUserProfileModalError] = useState<string | null>(null);
+
+  // State for SuperemojiMenu
+  const [superemojiMenuState, setSuperemojiMenuState] = useState<{
+    isVisible: boolean;
+    message: Message | null;
+    position: { x: number; y: number } | null;
+    reactingUsersProfiles?: Array<{ id: string; username?: string; avatar_url?: string; emoji: string }>; // Added
+  }>({ isVisible: false, message: null, position: null, reactingUsersProfiles: [] });
+
+  // State for simple toast notifications
+  const [toast, setToast] = useState<{ message: string; isVisible: boolean; type: 'success' | 'error' }>({ message: '', isVisible: false, type: 'success' });
+  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper function to show a toast message
+  const showToast = (message: string, type: 'success' | 'error' = 'success', duration: number = 3000) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    setToast({ message, isVisible: true, type });
+    toastTimerRef.current = setTimeout(() => {
+      setToast({ message: '', isVisible: false, type: 'success' });
+      toastTimerRef.current = null;
+    }, duration);
+  };
 
   // Helper function to process raw reactions and stitch them to messages
   const processAndStitchReactions = useCallback((
@@ -2111,12 +2142,12 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         setLoading(false);
         return;
       }
-
+      
       // Add a check to prevent multiple initial fetches if one is already in progress
       if (initialFetchRef.current) {
         console.log('[INITIAL_FETCH] Initial fetch already in progress or completed. Skipping.');
-        return;
-      }
+            return;
+          }
       initialFetchRef.current = true; // Mark as started
       setLoading(true);
       setError(null);
@@ -2138,18 +2169,18 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         // The key is that after fetching `initialMessagesData`, we process them.
 
         const { data: initialMessagesData, error: messagesError } = await supabase
-          .from('messages')
-          .select(`
-            *,
-            is_read,
-            reply_to:reply_to_message_id (
-              content,
-              user_id,
-              media_url,
-              media_type,
-              is_read
-            )
-          `)
+            .from('messages')
+            .select(`
+              *,
+              is_read,
+              reply_to:reply_to_message_id (
+                content,
+                user_id,
+                media_url,
+                media_type,
+                is_read
+              )
+            `)
           .eq('chat_id', params.chatId)
           .order('created_at', { ascending: false }) // Fetch latest first
           .limit(50); // Example limit
@@ -2159,8 +2190,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           setError(messagesError.message);
           setLoading(false);
           initialFetchRef.current = false; // Reset if fetch failed
-          return;
-        }
+            return;
+          }
 
         let transformedMessages = [];
         if (initialMessagesData && initialMessagesData.length > 0) {
@@ -2172,15 +2203,15 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             }
           });
 
-          const { data: profilesData, error: profilesError } = await supabase
-            .from('profiles')
+            const { data: profilesData, error: profilesError } = await supabase
+              .from('profiles')
             .select('id, username, avatar_url') // Assuming avatar_url exists for profiles
-            .in('id', Array.from(userIds));
+              .in('id', Array.from(userIds));
 
-          if (profilesError) {
+            if (profilesError) {
             console.error('[INITIAL_FETCH] Error fetching profiles for initial messages:', profilesError);
             // Continue without profiles or handle error as appropriate
-          }
+            }
 
           const profilesMap = new Map(profilesData?.map(p => [p.id, p]) || []);
           transformedMessages = initialMessagesData.map(m => ({
@@ -2222,20 +2253,20 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           // This depends on the exact logic of initial fetch (e.g. if it aims for unread or absolute bottom)
           setHasNewer(false); // Typically, initial load gets the newest, so no "newer" from this point.
                              // This might need adjustment based on precise unread/anchor logic.
-        } else {
+          } else {
           setMessages([]);
           setOldestCursor(null);
           setNewestCursor(null);
-          setHasMore(false);
-          setHasNewer(false);
-        }
+            setHasMore(false);
+            setHasNewer(false);
+          }
         console.log('[INITIAL_FETCH] Initial messages loaded and state updated.');
       } catch (err: any) {
         console.error('[INITIAL_FETCH] Critical error during initial message fetch:', err);
         setError(err.message || 'Failed to load initial messages.');
         initialFetchRef.current = false; // Reset on critical error
       } finally {
-        setLoading(false);
+          setLoading(false);
         // initialFetchRef.current should remain true if successful to prevent re-fetch
         // It's reset above only on specific error conditions before this finally block.
         console.log('[INITIAL_FETCH] Finished initial message fetch. Loading state set to false.');
@@ -3401,6 +3432,376 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     }
   }, [loading, messages, user?.id, unreadCount, firstUnreadId, firstUnreadMessageIdForBanner]);
 
+  useEffect(() => {
+    if (!user || !params.chatId) return;
+
+    console.log('[REALTIME] Setting up real-time subscriptions for chat:', params.chatId);
+    
+    // Subscribe to new messages (existing subscription)
+    const messagesChannel = supabase
+      .channel(`chat-messages:${params.chatId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.chatId}` },
+        async (payload) => {
+          console.log('[REALTIME_MESSAGE] New message payload:', payload.new);
+          // ... existing message handling logic ...
+          // Ensure new messages are processed with processAndStitchReactions or have reactions: []
+          // (This was handled in a previous step by initializing reactions: [])
+          const messageId = payload.new.id;
+          const existingMessage = messages.find(m => m.id === messageId);
+          if (existingMessage) {
+             console.log('[REALTIME_MESSAGE] Message already exists in state, possibly from optimistic update or race.');
+             return; // Avoid duplication if already handled
+          }
+
+          // Fetch the full message data with profiles etc.
+          const { data: messageData, error: msgError } = await supabase
+            .from('messages')
+            .select(`*,
+                     is_read,
+                     reply_to:reply_to_message_id (content, user_id, media_url, media_type, is_read),
+                     profiles (id, username, avatar_url)
+                    `)
+            .eq('id', messageId)
+            .single();
+
+          if (msgError || !messageData) {
+            console.error('[REALTIME_MESSAGE] Error fetching full new message or message not found:', msgError);
+            return;
+          }
+          
+          // If reply_to exists, fetch its profile too if not embedded
+          let fullMessageData = { ...messageData, reactions: [] } as Message; // Initialize reactions
+          if (messageData.reply_to && messageData.reply_to.user_id && !messageData.reply_to.profiles) {
+            const { data: replyToProfile, error: replyProfileError } = await supabase
+              .from('profiles')
+              .select('id, username, avatar_url')
+              .eq('id', messageData.reply_to.user_id)
+              .single();
+            if (replyProfileError) console.error('[REALTIME_MESSAGE] Error fetching reply_to profile', replyProfileError);
+            else if (messageData.reply_to) messageData.reply_to.profiles = replyToProfile;
+          }
+          fullMessageData = messageData as Message;
+          fullMessageData.reactions = []; // Ensure it has reactions array
+
+
+          setMessages(prevMessages => {
+            if (prevMessages.some(m => m.id === fullMessageData.id)) return prevMessages;
+            const newMessagesArray = [...prevMessages, fullMessageData].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+            return newMessagesArray;
+          });
+
+        }
+      )
+      // Add other event types for messages if needed (e.g., UPDATE for edits)
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[REALTIME_MESSAGE] Subscribed to messages channel for chat:', params.chatId);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[REALTIME_MESSAGE] Subscription error or timed out for messages:', err, params.chatId);
+        }
+      });
+
+    // Subscribe to reaction changes (NEW subscription)
+    const reactionsChannel = supabase
+      .channel(`chat-reactions:${params.chatId}`) // Unique channel name per chat for reactions
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'reactions' }, // Listen to all changes on reactions table
+        async (payload) => {
+          const { eventType, new: newReaction, old: oldReactionRecord } = payload;
+          const affectedMessageId = eventType === 'DELETE' ? oldReactionRecord?.message_id : newReaction?.message_id;
+
+          console.log(`[RT_REACTION_EVENT] Event: ${eventType}, MsgID: ${affectedMessageId}, Payload:`, payload);
+
+          if (!affectedMessageId && eventType === 'DELETE') { // Log specific for DELETE if ID is missing
+            console.warn('[RT_REACTION_DELETE_RCV] affectedMessageId is undefined for DELETE. Full oldRecord:', JSON.stringify(oldReactionRecord, null, 2));
+          } else if (!affectedMessageId) {
+            console.warn('[RT_REACTION_EVENT] No affected message_id in payload (non-DELETE event or oldRecord also missing it)');
+            return;
+          }
+
+          const messageInView = messages.find(m => m.id === affectedMessageId);
+          if (!messageInView) {
+            console.log('[RT_REACTION_EVENT] Affected message not in current view, ignoring.', affectedMessageId);
+            return;
+          }
+
+          if (eventType === 'DELETE') {
+            console.log(`[RT_REACTION_DELETE_RCV] Received DELETE for MsgID: ${affectedMessageId}. Stringified oldRecord:`, JSON.stringify(oldReactionRecord, null, 2));
+            // console.log(`[RT_REACTION_DELETE_RCV] Message found in view for MsgID ${affectedMessageId}:`, messageInView); // Keep if needed, but focus on oldRecord
+          }
+
+          console.log(`[RT_REACTION_EVENT] Processing ${eventType} for message:`, affectedMessageId);
+
+          const { data: currentReactions, error: fetchReactionsError } = await supabase
+            .from('reactions')
+            .select('message_id, user_id, emoji')
+            .eq('message_id', affectedMessageId);
+
+          if (eventType === 'DELETE') {
+            console.log(`[RT_REACTION_DELETE_RCV] Fetched reactions for MsgID ${affectedMessageId} AFTER delete event:`, currentReactions);
+          }
+
+          if (fetchReactionsError) {
+            console.error('[RT_REACTION_EVENT] Error fetching reactions for message:', affectedMessageId, fetchReactionsError);
+            return;
+          }
+          
+          // Crucially, ensure messageInView here is the one from the current state before this specific update.
+          // processAndStitchReactions expects an array.
+          const originalMessageForStitching = messages.find(m => m.id === affectedMessageId);
+          if (!originalMessageForStitching) {
+             console.error("[RT_REACTION_EVENT] Race condition or error: messageInView disappeared before stitching?");
+             return;
+          }
+
+          const updatedMessageArray = processAndStitchReactions([originalMessageForStitching], currentReactions || [], user?.id);
+          
+          if (updatedMessageArray.length === 0) {
+            console.error("[RT_REACTION_EVENT] processAndStitchReactions returned empty array for a found message.");
+            return; 
+          }
+          
+          const updatedMessageWithReactions = updatedMessageArray[0];
+
+          if (eventType === 'DELETE') {
+            console.log(`[RT_REACTION_DELETE_RCV] Message after stitching for MsgID ${affectedMessageId}:`, updatedMessageWithReactions);
+            console.log(`[RT_REACTION_DELETE_RCV] Reactions on this message:`, updatedMessageWithReactions.reactions);
+          }
+
+          setMessages(prevMessages => {
+            if (eventType === 'DELETE') {
+              const msgBeforeUpdate = prevMessages.find(m => m.id === affectedMessageId);
+              console.log(`[RT_REACTION_DELETE_RCV] prevMessages state for MsgID ${affectedMessageId} before this update:`, msgBeforeUpdate?.reactions);
+            }
+            const newMessages = prevMessages.map(msg => 
+              msg.id === affectedMessageId ? updatedMessageWithReactions : msg
+            );
+            if (eventType === 'DELETE') {
+                const msgAfterUpdateAttempt = newMessages.find(m => m.id === affectedMessageId);
+                console.log(`[RT_REACTION_DELETE_RCV] Message state for MsgID ${affectedMessageId} in newMessages array (to be set):`, msgAfterUpdateAttempt?.reactions);
+            }
+            return newMessages;
+          });
+          console.log('[RT_REACTION_EVENT] setMessages called for MsgID:', affectedMessageId, 'Event:', eventType);
+        }
+      )
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[REALTIME_REACTION] Subscribed to reactions channel for chat:', params.chatId);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[REALTIME_REACTION] Subscription error or timed out for reactions:', err, params.chatId);
+        }
+      });
+
+    channelRef.current = messagesChannel; // Keep main channel ref, or manage multiple if needed
+    // Store reactionsChannel ref if separate cleanup is needed, though Supabase might handle it.
+    const reactionsChannelRef = reactionsChannel; // To use in cleanup
+
+    return () => {
+      console.log('[REALTIME] Cleaning up subscriptions for chat:', params.chatId);
+      if (messagesChannel) supabase.removeChannel(messagesChannel);
+      if (reactionsChannelRef) supabase.removeChannel(reactionsChannelRef); // Explicitly remove reaction channel
+      channelRef.current = null;
+    };
+  }, [user, params.chatId, supabase, processAndStitchReactions, messages]); // Added supabase, processAndStitchReactions, and messages to dependency array
+
+  const handleOpenSuperemojiMenu = async (message: Message, position: { x: number; y: number }) => {
+    let profilesForMenu: Array<{ id: string; username?: string; avatar_url?: string; emoji: string }> = [];
+    if (message.reactions && message.reactions.length > 0 && supabase) {
+      const allUserIdsInReactions = new Set<string>();
+      message.reactions.forEach(reactionSummary => {
+        reactionSummary.userIds.forEach(uid => allUserIdsInReactions.add(uid));
+      });
+
+      if (allUserIdsInReactions.size > 0) {
+        const { data: fetchedProfiles, error: profileError } = await supabase
+          .from('profiles')
+          .select('id, username, avatar_url')
+          .in('id', Array.from(allUserIdsInReactions));
+        
+        if (profileError) {
+          console.error("[SuperemojiMenu] Error fetching profiles for reacting users:", profileError);
+        } else if (fetchedProfiles) {
+          const profilesMap = new Map(fetchedProfiles.map(p => [p.id, p]));
+          message.reactions.forEach(reactionSummary => {
+            reactionSummary.userIds.forEach(uid => {
+              const userProfile = profilesMap.get(uid);
+              profilesForMenu.push({
+                id: uid,
+                username: userProfile?.username || 'User',
+                avatar_url: userProfile?.avatar_url,
+                emoji: reactionSummary.emoji,
+              });
+            });
+          });
+        }
+      }
+    }
+    setSuperemojiMenuState({ isVisible: true, message, position, reactingUsersProfiles: profilesForMenu });
+  };
+
+  const handleCloseSuperemojiMenu = () => {
+    setSuperemojiMenuState({ isVisible: false, message: null, position: null, reactingUsersProfiles: [] });
+  };
+
+  // Generic optimistic toggle handler for reactions
+  const handleOptimisticallyToggleReaction = (messageId: string, emoji: string, currentReactionSummaryForEmoji: ReactionSummary | undefined) => {
+    if (!user) return;
+    const currentUserId = user.id;
+    const isCurrentlyReactedByMe = currentReactionSummaryForEmoji?.reactedByCurrentUser || false;
+
+    setMessages(prevMessages => 
+      prevMessages.map(msg => {
+        if (msg.id === messageId) {
+          let newReactions = [...(msg.reactions || [])];
+          const reactionIndex = newReactions.findIndex(r => r.emoji === emoji);
+
+          if (isCurrentlyReactedByMe) { // User is REMOVING this reaction (based on state *before* toggle)
+            if (reactionIndex > -1) {
+              const reactionToUpdate = { ...newReactions[reactionIndex] }; 
+              reactionToUpdate.count -= 1;
+              reactionToUpdate.userIds = reactionToUpdate.userIds.filter(uid => uid !== currentUserId);
+              reactionToUpdate.reactedByCurrentUser = false; 
+              if (reactionToUpdate.count <= 0) {
+                newReactions.splice(reactionIndex, 1); 
+              } else {
+                newReactions[reactionIndex] = reactionToUpdate; 
+              }
+            }
+          } else { // User is ADDING this reaction
+            if (reactionIndex > -1) { 
+              const reactionToUpdate = { ...newReactions[reactionIndex] };
+              if (!reactionToUpdate.userIds.includes(currentUserId)) {
+                reactionToUpdate.count += 1;
+                reactionToUpdate.userIds = [...reactionToUpdate.userIds, currentUserId];
+              }
+              reactionToUpdate.reactedByCurrentUser = true; 
+              newReactions[reactionIndex] = reactionToUpdate;
+            } else { 
+              newReactions.push({
+                emoji,
+                count: 1,
+                reactedByCurrentUser: true,
+                userIds: [currentUserId]
+              });
+            }
+          }
+          newReactions.sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return a.emoji.localeCompare(b.emoji);
+          });
+          return { ...msg, reactions: newReactions };
+        }
+        return msg;
+      })
+    );
+  };
+
+  const handleMenuSelectEmoji = async (emoji: string) => {
+    if (!superemojiMenuState.message || !user) {
+      console.error("[SuperemojiMenu] Message or user not available for reaction.");
+      handleCloseSuperemojiMenu();
+      return;
+    }
+    
+    const messageId = superemojiMenuState.message.id;
+    const currentUserId = user.id;
+    const selectedMessage = superemojiMenuState.message; 
+
+    console.log('[SuperemojiMenu] Toggling emoji:', emoji, 'for message:', messageId);
+    handleCloseSuperemojiMenu(); 
+
+    const currentReactionSummary = selectedMessage.reactions?.find(r => r.emoji === emoji);
+    handleOptimisticallyToggleReaction(messageId, emoji, currentReactionSummary); // Use the new handler
+
+    const hasUserReactedWithThisEmoji = currentReactionSummary?.reactedByCurrentUser || false;
+
+    try {
+      if (hasUserReactedWithThisEmoji) {
+        const { error } = await removeReaction(messageId, currentUserId, emoji);
+        if (error) console.error('[SuperemojiMenu] Error removing reaction (DB):', error.message);
+      } else {
+        const { error } = await addReaction(messageId, currentUserId, emoji);
+        if (error) console.error('[SuperemojiMenu] Error adding reaction (DB):', error.message);
+      }
+    } catch (err: any) {
+      console.error('[SuperemojiMenu] Unexpected error toggling reaction:', err.message ? err.message : err);
+    }
+  };
+
+  const handleMenuReply = () => {
+    if (!superemojiMenuState.message) {
+      console.error("[SuperemojiMenu] No message available for reply action.");
+      handleCloseSuperemojiMenu();
+      return;
+    }
+    console.log('[SuperemojiMenu] Reply action for message:', superemojiMenuState.message.id);
+    setReplyingTo(superemojiMenuState.message); // Use existing setReplyingTo state updater
+    handleCloseSuperemojiMenu();
+  };
+
+  const handleMenuCopy = async () => {
+    if (!superemojiMenuState.message || typeof superemojiMenuState.message.content !== 'string') {
+      console.error("[SuperemojiMenu] No message content available for copy action.");
+      handleCloseSuperemojiMenu();
+      return;
+    }
+    console.log('[SuperemojiMenu] Copy action for message:', superemojiMenuState.message.id);
+    try {
+      await navigator.clipboard.writeText(superemojiMenuState.message.content);
+      console.log('[SuperemojiMenu] Message content copied to clipboard.');
+      showToast('Copied to clipboard!', 'success');
+    } catch (err) {
+      console.error('[SuperemojiMenu] Failed to copy message content:', err);
+      showToast('Failed to copy', 'error');
+    }
+    handleCloseSuperemojiMenu();
+  };
+
+  // Function to handle opening the user profile modal
+  const handleOpenUserProfileModal = async (userId: string) => {
+    if (!userId) return;
+    setUserProfileModalLoading(true);
+    setUserProfileModalError(null);
+    setSelectedUserProfile(null);
+    setIsUserProfileModalOpen(true);
+
+    try {
+      const { data: profileData, error } = await supabase
+        .from('profiles')
+        .select('id, username, avatar_url, bio') // Ensure we select all needed fields
+        .eq('id', userId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching profile for modal:', error);
+        setUserProfileModalError(error.message || 'Failed to load profile.');
+        setSelectedUserProfile(null); // Clear any potentially stale data
+      } else if (profileData) {
+        setSelectedUserProfile(profileData as UserProfile); // Cast to UserProfile type from the modal
+      } else {
+        setUserProfileModalError('Profile not found.');
+        setSelectedUserProfile(null);
+      }
+    } catch (err: any) {
+      console.error('Unexpected error fetching profile for modal:', err);
+      setUserProfileModalError(err.message || 'An unexpected error occurred.');
+      setSelectedUserProfile(null);
+    } finally {
+      setUserProfileModalLoading(false);
+    }
+  };
+
+  const handleCloseUserProfileModal = () => {
+    setIsUserProfileModalOpen(false);
+    setSelectedUserProfile(null);
+    setUserProfileModalLoading(false);
+    setUserProfileModalError(null);
+  };
+
   if (loading) {
     return (
       <div className="h-screen flex flex-col">
@@ -3419,7 +3820,21 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   }
 
   return (
-    <main className="h-screen flex flex-col">
+    <main className="h-screen flex flex-col relative"> {/* Added relative positioning for toast container */}
+      {/* SuperemojiMenu - Rendered at top level */}
+      {superemojiMenuState.isVisible && superemojiMenuState.message && superemojiMenuState.position && (
+        <SuperemojiMenu
+          message={superemojiMenuState.message}
+          isVisible={superemojiMenuState.isVisible}
+          position={superemojiMenuState.position}
+          reactingUsersProfiles={superemojiMenuState.reactingUsersProfiles || []} // Pass new prop
+          onClose={handleCloseSuperemojiMenu}
+          onSelectEmoji={handleMenuSelectEmoji}
+          onReply={handleMenuReply}
+          onCopy={handleMenuCopy}
+        />
+      )}
+
       {/* Chat Header */}
       <ChatHeader 
         chatId={params.chatId}
@@ -3504,6 +3919,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                     onInitiateReplyJump={initiateReplyJump}
                     isReplyJumpTarget={isReplyJumpTarget}
                     onReturnFromReply={executeReturnFromReply}
+                    onOpenSuperemojiMenu={handleOpenSuperemojiMenu} // Passed to MessageBubble
+                    onOptimisticallyToggleReaction={handleOptimisticallyToggleReaction} // Pass new handler
+                    onAvatarClick={handleOpenUserProfileModal} // Pass the new handler
                   />
                 </div>
               );
@@ -3594,6 +4012,25 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           chatId={params.chatId}
           onClose={() => setModalVisible(false)}
         />
+      )}
+
+      {/* Render the new UserProfileModal */}
+      <UserProfileModal 
+        isOpen={isUserProfileModalOpen}
+        onClose={handleCloseUserProfileModal}
+        profile={selectedUserProfile}
+        isLoading={userProfileModalLoading}
+        error={userProfileModalError}
+      />
+
+      {/* Simple Toast Notification */}
+      {toast.isVisible && (
+        <div 
+          className={`fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-md shadow-lg text-white text-sm 
+                      ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}
+        >
+          {toast.message}
+        </div>
       )}
     </main>
   );

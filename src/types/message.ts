@@ -14,11 +14,13 @@ export type Message = {
     media_type?: 'image' | 'video' | 'gif';
     profiles?: {
       username: string;
+      avatar_url?: string | null;
     };
     is_read: boolean;
   };
   profiles?: {
     username: string;
+    avatar_url?: string | null;
   };
   is_read: boolean;
   reactions?: ReactionSummary[];
