@@ -265,6 +265,8 @@ import UserModal from '@/components/UserModal';
 import UserProfileModal, { UserProfile } from '@/components/UserProfileModal'; // Import new modal and its Profile type
 import SuperemojiMenu from '@/components/SuperemojiMenu'; // Added
 import ChatPageMessagesSkeleton from '@/components/Skeletons/ChatPageMessagesSkeleton'; // Import skeleton
+import PinnedMessageBanner from '@/components/PinnedMessageBanner'; // Import PinnedMessageBanner
+import PinnedMessagesModal from '@/components/PinnedMessagesModal'; // Import PinnedMessagesModal
 
 export default function ChatPage({ params }: { params: { chatId: string } }) {
   const { user } = useAuth();
@@ -298,32 +300,162 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   const [selectedUserProfile, setSelectedUserProfile] = useState<UserProfile | null>(null);
   const [userProfileModalLoading, setUserProfileModalLoading] = useState(false);
   const [userProfileModalError, setUserProfileModalError] = useState<string | null>(null);
+  const [latestPinnedMessage, setLatestPinnedMessage] = useState<Message | null>(null);
+  const [isPinnedMessagesModalOpen, setIsPinnedMessagesModalOpen] = useState(false); // State for pinned messages modal
 
   // State for SuperemojiMenu
   const [superemojiMenuState, setSuperemojiMenuState] = useState<{
     isVisible: boolean;
     message: Message | null;
     position: { x: number; y: number } | null;
-    reactingUsersProfiles?: Array<{ id: string; username?: string; avatar_url?: string; emoji: string }>; // Added
+    reactingUsersProfiles?: Array<{ id: string; username?: string; avatar_url?: string; emoji: string }>; 
   }>({ isVisible: false, message: null, position: null, reactingUsersProfiles: [] });
 
-  const { showToast } = useToasts(); // Get global showToast
+  const { showToast } = useToasts(); 
 
-  // Remove local toast state and related refs/functions
-  // const [toast, setToast] = useState<{ message: string; isVisible: boolean; type: 'success' | 'error' }>({ message: '', isVisible: false, type: 'success' });
-  // const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Local toast state, ref, and helper function have been removed.
 
-  // Remove local showToast helper function
-  // const showToastLocal = (message: string, type: 'success' | 'error' = 'success', duration: number = 3000) => {
-  //   if (toastTimerRef.current) {
-  //     clearTimeout(toastTimerRef.current);
-  //   }
-  //   setToast({ message, isVisible: true, type });
-  //   toastTimerRef.current = setTimeout(() => {
-  //     setToast({ message: '', isVisible: false, type: 'success' });
-  //     toastTimerRef.current = null;
-  //   }, duration);
-  // };
+  const fetchLatestPinnedMessage = async () => {
+    if (!params.chatId || !supabase) return; 
+    try {
+      console.log('[PINNED_BANNER] Fetching latest pinned message for chat:', params.chatId);
+      // Step 1: Fetch the core pinned message data
+      const { data: messageData, error: messageError } = await supabase
+        .from('messages')
+        .select('*, reply_to:reply_to_message_id!left(user_id, content, media_type)') // Get essential fields, including reply author ID
+        .eq('chat_id', params.chatId)
+        .eq('is_pinned', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (messageError) {
+        console.error('Error fetching latest pinned message (step 1):', messageError);
+        showToast('Could not load pinned message.', 'error');
+        setLatestPinnedMessage(null);
+        return;
+      }
+
+      if (!messageData) {
+        setLatestPinnedMessage(null); // No pinned message found
+        return;
+      }
+
+      // Step 2: Fetch author profile for the main message
+      let authorProfile = null;
+      if (messageData.user_id) {
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('id, username, avatar_url')
+          .eq('id', messageData.user_id)
+          .single();
+        if (profileError) {
+          console.error('Error fetching author profile for pinned message:', profileError);
+          // Decide if this is critical for the banner; for MVP, can proceed without profile
+        } else {
+          authorProfile = profileData;
+        }
+      }
+      
+      // Step 3: (Optional for banner, more for modal) Fetch profile for replied-to user if exists
+      // For the banner, we primarily need the main message author. The reply_to content is often just text.
+
+      // Step 4: Construct the final message object for state
+      const finalMessageData = {
+        ...messageData,
+        profiles: authorProfile, // Attach the fetched profile
+        // reply_to object from initial fetch is kept, profiles for it aren't critical for banner
+      };
+
+      console.log('[PINNED_BANNER] Processed pinned message for state:', finalMessageData);
+      setLatestPinnedMessage(finalMessageData as Message | null);
+
+    } catch (err: any) {
+      console.error('Unexpected error fetching pinned message:', err);
+      showToast('Error loading pinned message.', 'error');
+      setLatestPinnedMessage(null);
+    }
+  };
+
+  const handlePinMessage = async (messageId: string) => {
+    console.log('[PINNING] Pinning message:', messageId);
+    // Optimistic UI Update
+    setMessages(prevMessages => 
+      prevMessages.map(msg => 
+        msg.id === messageId ? { ...msg, is_pinned: true } : msg
+      )
+    );
+
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .update({ is_pinned: true })
+        .eq('id', messageId);
+
+      if (error) {
+        showToast(`Failed to pin message: ${error.message}`, 'error');
+        // Revert optimistic update on error
+        setMessages(prevMessages => 
+          prevMessages.map(msg => 
+            msg.id === messageId ? { ...msg, is_pinned: false } : msg // Assuming it was false before
+          )
+        );
+        console.error('Error pinning message:', error);
+      } else {
+        showToast('Message pinned!', 'success');
+        fetchLatestPinnedMessage(); // Refresh banner
+      }
+    } catch (err: any) {
+      showToast(`An unexpected error occurred: ${err.message}`, 'error');
+      // Revert optimistic update on error
+      setMessages(prevMessages => 
+        prevMessages.map(msg => 
+          msg.id === messageId ? { ...msg, is_pinned: false } : msg
+        )
+      );
+      console.error('Unexpected error pinning message:', err);
+    }
+  };
+
+  const handleUnpinMessage = async (messageId: string) => {
+    console.log('[PINNING] Unpinning message:', messageId);
+    // Optimistic UI Update
+    setMessages(prevMessages => 
+      prevMessages.map(msg => 
+        msg.id === messageId ? { ...msg, is_pinned: false } : msg
+      )
+    );
+
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .update({ is_pinned: false })
+        .eq('id', messageId);
+
+      if (error) {
+        showToast(`Failed to unpin message: ${error.message}`, 'error');
+        // Revert optimistic update on error
+        setMessages(prevMessages => 
+          prevMessages.map(msg => 
+            msg.id === messageId ? { ...msg, is_pinned: true } : msg // Assuming it was true before
+          )
+        );
+        console.error('Error unpinning message:', error);
+      } else {
+        showToast('Message unpinned!', 'success');
+        fetchLatestPinnedMessage(); // Refresh banner
+      }
+    } catch (err: any) {
+      showToast(`An unexpected error occurred: ${err.message}`, 'error');
+      // Revert optimistic update on error
+      setMessages(prevMessages => 
+        prevMessages.map(msg => 
+          msg.id === messageId ? { ...msg, is_pinned: true } : msg
+        )
+      );
+      console.error('Unexpected error unpinning message:', err);
+    }
+  };
 
   // Helper function to process raw reactions and stitch them to messages
   const processAndStitchReactions = useCallback((
@@ -2265,6 +2397,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             setHasNewer(false);
           }
         console.log('[INITIAL_FETCH] Initial messages loaded and state updated.');
+        fetchLatestPinnedMessage(); // Fetch pinned message after initial load
       } catch (err: any) {
         console.error('[INITIAL_FETCH] Critical error during initial message fetch:', err);
         setError(err.message || 'Failed to load initial messages.');
@@ -3446,59 +3579,78 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       .channel(`chat-messages:${params.chatId}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.chatId}` },
+        { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.chatId}` },
         async (payload) => {
-          console.log('[REALTIME_MESSAGE] New message payload:', payload.new);
-          // ... existing message handling logic ...
-          // Ensure new messages are processed with processAndStitchReactions or have reactions: []
-          // (This was handled in a previous step by initializing reactions: [])
-          const messageId = payload.new.id;
-          const existingMessage = messages.find(m => m.id === messageId);
-          if (existingMessage) {
-             console.log('[REALTIME_MESSAGE] Message already exists in state, possibly from optimistic update or race.');
-             return; // Avoid duplication if already handled
+          console.log('[REALTIME_MESSAGE_EVENT] Event type:', payload.eventType, 'Payload:', payload);
+
+          if (payload.eventType === 'INSERT') {
+            const newMessagePayload = payload.new as Message;
+            console.log('[REALTIME_MESSAGE] New message INSERT received:', newMessagePayload);
+            
+            if (messages.some(m => m.id === newMessagePayload.id)) {
+               console.log('[REALTIME_MESSAGE] Message already exists, skipping.');
+               return; 
+            }
+
+            let messageToInsert = { ...newMessagePayload, reactions: newMessagePayload.reactions || [] };
+
+            // Ensure author profile is attached
+            if (newMessagePayload.user_id && !newMessagePayload.profiles) {
+              const { data: profileData, error: profileError } = await supabase
+                .from('profiles')
+                .select('id, username, avatar_url')
+                .eq('id', newMessagePayload.user_id)
+                .single();
+              if (profileError) {
+                console.error('[REALTIME_MESSAGE] Error fetching profile for new message:', profileError);
+              } else {
+                messageToInsert.profiles = profileData;
+              }
+            }
+            
+            // Ensure replied-to message profile is attached (if reply_to exists and needs profile)
+            // For MVP, payload.new.reply_to might be just an ID. If full reply_to object with profiles is needed here,
+            // similar separate fetch for reply_to.user_id's profile would be required if not already in payload.
+            // Assuming payload.new.reply_to is sufficient or handled by initial select if it includes profiles.
+
+            setMessages(prevMessages => {
+              const newMessagesArray = [...prevMessages, messageToInsert as Message].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+              return newMessagesArray;
+            });
+
+            // Update unread count logic (remains the same)
+            if (newMessagePayload.user_id !== user.id) {
+              unreadCountRef.current += 1;
+              if (!firstUnreadIdRef.current) {
+                firstUnreadIdRef.current = newMessagePayload.id;
+              }
+              setUnreadCount(unreadCountRef.current);
+              if (!firstUnreadId) {
+                 setFirstUnreadId(firstUnreadIdRef.current);
+              }
+              if (!firstUnreadMessageIdForBanner) {
+                setFirstUnreadMessageIdForBanner(newMessagePayload.id);
+              }
+            }
+
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedMessage = payload.new as Message;
+            console.log('[REALTIME_MESSAGE] Updated message payload:', updatedMessage);
+            
+            setMessages(prevMessages =>
+              prevMessages.map(msg =>
+                msg.id === updatedMessage.id ? { ...msg, ...updatedMessage, reactions: msg.reactions || updatedMessage.reactions || [] } : msg
+              )
+            );
+            // Always refresh pinned message banner on any message update in this chat, 
+            // as its pinned status might have changed.
+            fetchLatestPinnedMessage();
+            
+            // If PinnedMessagesModal is open, it will refetch on its next open or if we implement a direct refresh.
+            // For MVP, banner update is the primary real-time feedback.
           }
-
-          // Fetch the full message data with profiles etc.
-          const { data: messageData, error: msgError } = await supabase
-            .from('messages')
-            .select(`*,
-                     is_read,
-                     reply_to:reply_to_message_id (content, user_id, media_url, media_type, is_read),
-                     profiles (id, username, avatar_url)
-                    `)
-            .eq('id', messageId)
-            .single();
-
-          if (msgError || !messageData) {
-            console.error('[REALTIME_MESSAGE] Error fetching full new message or message not found:', msgError);
-            return;
-          }
-          
-          // If reply_to exists, fetch its profile too if not embedded
-          let fullMessageData = { ...messageData, reactions: [] } as Message; // Initialize reactions
-          if (messageData.reply_to && messageData.reply_to.user_id && !messageData.reply_to.profiles) {
-            const { data: replyToProfile, error: replyProfileError } = await supabase
-              .from('profiles')
-              .select('id, username, avatar_url')
-              .eq('id', messageData.reply_to.user_id)
-              .single();
-            if (replyProfileError) console.error('[REALTIME_MESSAGE] Error fetching reply_to profile', replyProfileError);
-            else if (messageData.reply_to) messageData.reply_to.profiles = replyToProfile;
-          }
-          fullMessageData = messageData as Message;
-          fullMessageData.reactions = []; // Ensure it has reactions array
-
-
-          setMessages(prevMessages => {
-            if (prevMessages.some(m => m.id === fullMessageData.id)) return prevMessages;
-            const newMessagesArray = [...prevMessages, fullMessageData].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-            return newMessagesArray;
-          });
-
         }
       )
-      // Add other event types for messages if needed (e.g., UPDATE for edits)
       .subscribe((status, err) => {
         if (status === 'SUBSCRIBED') {
           console.log('[REALTIME_MESSAGE] Subscribed to messages channel for chat:', params.chatId);
@@ -3830,11 +3982,14 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           message={superemojiMenuState.message}
           isVisible={superemojiMenuState.isVisible}
           position={superemojiMenuState.position}
-          reactingUsersProfiles={superemojiMenuState.reactingUsersProfiles || []} // Pass new prop
+          reactingUsersProfiles={superemojiMenuState.reactingUsersProfiles || []} 
           onClose={handleCloseSuperemojiMenu}
           onSelectEmoji={handleMenuSelectEmoji}
           onReply={handleMenuReply}
           onCopy={handleMenuCopy}
+          isCurrentUserAdmin={currentUserProfile?.is_admin || false} // Pass admin status
+          onPinMessage={handlePinMessage} // Pass new handler
+          onUnpinMessage={handleUnpinMessage} // Pass new handler
         />
       )}
 
@@ -3844,8 +3999,19 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         onOpenModal={() => setModalVisible(true)}
       />
       
+      {/* Render Pinned Message Banner if a message is pinned */}
+      {latestPinnedMessage && (
+        <PinnedMessageBanner 
+          pinnedMessage={latestPinnedMessage} 
+          onClick={() => {
+            // console.log('Pinned message banner clicked. Message ID:', latestPinnedMessage.id);
+            // showToast('List of all pinned messages coming soon!', 'info'); 
+            setIsPinnedMessagesModalOpen(true); // Open the modal
+          }} 
+        />
+      )}
+      
       {/* Remove debug components - TestModeToggle, TestControls, TestModeIndicator */}
-      {/* Show only when in development and specifically enabled - can be controlled by adding a query param or env var */}
       {false && (
         <>
           <TestModeToggle />
@@ -4026,15 +4192,18 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         error={userProfileModalError}
       />
 
-      {/* Simple Toast Notification */}
-      {/* {toast.isVisible && (
-        <div 
-          className={`fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-md shadow-lg text-white text-sm 
-                      ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}
-        >
-          {toast.message}
-        </div>
-      )} */}
+      {/* Render the new PinnedMessagesModal */}
+      <PinnedMessagesModal
+        isOpen={isPinnedMessagesModalOpen}
+        onClose={() => setIsPinnedMessagesModalOpen(false)}
+        chatId={params.chatId}
+        currentUserIsAdmin={currentUserProfile?.is_admin || false}
+        onUnpinMessage={handleUnpinMessage} // Already defined in ChatPage
+        onScrollToMessage={handleScrollToMessage} // Already defined in ChatPage
+      />
+
+      {/* Simple Toast Notification - This was for the old local toast, global one is in layout */}
+      {/* {toast.isVisible && ( ... )} */}
     </main>
   );
 } 

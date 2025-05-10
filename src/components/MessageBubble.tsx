@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import Image from 'next/image';
 import { useAuth } from '@/lib/AuthContext';
 import { addReaction, removeReaction } from '@/lib/reactionService';
+import { Pin as PinIcon } from 'lucide-react';
 
 // Define color generation functions here or import if moved to utils
 const ACCENT_COLORS = [
@@ -507,12 +508,12 @@ export default function MessageBubble({
             )}
 
             {isShortTextMessage ? (
-              <div>
+              <div> 
                 {message.content && (
                   <p 
                     className="whitespace-pre-wrap break-all mr-2 min-w-0 inline"
                     ref={(el) => {
-                      if (isOwnMessage && el && message.content === 'dope') {
+                      if (isOwnMessage && el && message.content === 'dope') { 
                         console.log('[MessageBubble DEBUG SENDER SHORT <p> (inline)]', {
                           offsetWidth: el.offsetWidth,
                           scrollWidth: el.scrollWidth,
@@ -525,28 +526,20 @@ export default function MessageBubble({
                     {message.content}
                   </p>
                 )}
-                <span 
-                  className={`${newTimeStampFontSize} ${newTimeStampColorClasses} whitespace-nowrap relative translate-y-1 inline-block`}
-                  ref={(el) => {
-                    if (isOwnMessage && isShortTextMessage && message.content === 'dope' && el) {
-                      console.log('[MessageBubble DEBUG SENDER SHORT <span> (inline-block)]', {
-                        offsetWidth: el.offsetWidth,
-                        scrollWidth: el.scrollWidth,
-                        innerText: el.innerText,
-                        className: el.className,
-                      });
-                    }
-                  }}
-                >
-                  {timeStampString}
-                </span>
+                {/* Wrapper for pin icon and timestamp for short messages */}
+                <div className={`inline-flex items-center relative translate-y-1 whitespace-nowrap ${newTimeStampFontSize} ${newTimeStampColorClasses}`}>
+                  {message.is_pinned && <PinIcon className="h-3.5 w-3.5 mr-1 text-yellow-500 flex-shrink-0" />}
+                  <span>{timeStampString}</span>
+                </div>
               </div>
             ) : (
               <>
                 {message.content && <p className="whitespace-pre-wrap break-all">{message.content}</p>}
                 {message.media_url && renderMedia()}
-                <div className={`${newTimeStampFontSize} ${newTimeStampColorClasses} mt-1 text-right`}>
-                  {timeStampString}
+                {/* Timestamp and optional pin icon for long messages */}
+                <div className={`${newTimeStampFontSize} ${newTimeStampColorClasses} mt-1 text-right flex items-center justify-end`}>
+                  {message.is_pinned && <PinIcon className="h-3.5 w-3.5 mr-1 text-yellow-500 flex-shrink-0" />}
+                  <span>{timeStampString}</span>
                 </div>
               </>
             )}

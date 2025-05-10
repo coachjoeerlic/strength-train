@@ -24,6 +24,7 @@ export type Message = {
   };
   is_read: boolean;
   reactions?: ReactionSummary[];
+  is_pinned?: boolean;
 };
 
 export type ReactionSummary = {

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Message } from '@/types/message';
+import { Pin, PinOff, MessageSquareReply, Copy, X } from 'lucide-react';
 
 interface ReactingUserProfile {
   id: string;
@@ -17,6 +18,9 @@ interface SuperemojiMenuProps {
   onSelectEmoji: (emoji: string) => void;
   onReply: () => void;
   onCopy: () => void;
+  isCurrentUserAdmin?: boolean;
+  onPinMessage?: (messageId: string) => void;
+  onUnpinMessage?: (messageId: string) => void;
 }
 
 const PREDEFINED_EMOJIS = ['👍', '❤️', '😂', '🎉', '🤔', '😢']; // Example emojis
@@ -30,9 +34,13 @@ const SuperemojiMenu: React.FC<SuperemojiMenuProps> = ({
   onSelectEmoji,
   onReply,
   onCopy,
+  isCurrentUserAdmin,
+  onPinMessage,
+  onUnpinMessage,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [calculatedStyle, setCalculatedStyle] = useState<React.CSSProperties>({ opacity: 0 }); // Initially hidden
+  const [emojiSearch, setEmojiSearch] = useState('');
 
   useEffect(() => {
     if (isVisible && position && menuRef.current) {
@@ -165,6 +173,33 @@ const SuperemojiMenu: React.FC<SuperemojiMenuProps> = ({
           Copy Text
         </button>
       </div>
+
+      {/* Admin actions: Pin/Unpin */}
+      {isCurrentUserAdmin && message && onPinMessage && onUnpinMessage && (
+        <div className="mt-1 pt-1 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-0.5">
+          {message.is_pinned ? (
+            <button
+              onClick={() => {
+                onUnpinMessage(message.id);
+                onClose(); // Close menu after action
+              }}
+              className="text-left w-full px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors flex items-center"
+            >
+              <PinOff className="w-4 h-4 mr-2 flex-shrink-0" /> Unpin Message
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                onPinMessage(message.id);
+                onClose(); // Close menu after action
+              }}
+              className="text-left w-full px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors flex items-center"
+            >
+              <Pin className="w-4 h-4 mr-2 flex-shrink-0" /> Pin Message
+            </button>
+          )}
+        </div>
+      )}
 
       {/* User Reactions List */}
       {reactingUsersProfiles && reactingUsersProfiles.length > 0 && (
