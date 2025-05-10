@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Message } from '@/types/message';
-import { Pin, PinOff, MessageSquareReply, Copy, X } from 'lucide-react';
+import { Pin, PinOff, MessageSquareReply, Copy, X, Flag } from 'lucide-react';
 
 interface ReactingUserProfile {
   id: string;
@@ -21,6 +21,7 @@ interface SuperemojiMenuProps {
   isCurrentUserAdmin?: boolean;
   onPinMessage?: (messageId: string) => void;
   onUnpinMessage?: (messageId: string) => void;
+  onFlagMessage?: (messageId: string) => void;
 }
 
 const PREDEFINED_EMOJIS = ['👍', '❤️', '😂', '🎉', '🤔', '😢']; // Example emojis
@@ -37,6 +38,7 @@ const SuperemojiMenu: React.FC<SuperemojiMenuProps> = ({
   isCurrentUserAdmin,
   onPinMessage,
   onUnpinMessage,
+  onFlagMessage,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [calculatedStyle, setCalculatedStyle] = useState<React.CSSProperties>({ opacity: 0 }); // Initially hidden
@@ -172,6 +174,19 @@ const SuperemojiMenu: React.FC<SuperemojiMenuProps> = ({
         >
           Copy Text
         </button>
+
+        {/* Flag Message Button - visible to all users who can open the menu */}
+        {message && onFlagMessage && (
+          <button
+            onClick={() => {
+              onFlagMessage(message.id);
+              onClose(); // Close menu after action
+            }}
+            className="text-left w-full px-3 py-1.5 text-sm text-yellow-600 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-gray-700 rounded-md transition-colors flex items-center"
+          >
+            <Flag className="w-4 h-4 mr-2 flex-shrink-0" /> Flag Message
+          </button>
+        )}
       </div>
 
       {/* Admin actions: Pin/Unpin */}

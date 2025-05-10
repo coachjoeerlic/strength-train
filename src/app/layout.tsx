@@ -31,7 +31,7 @@ export default function RootLayout({
         <AuthProvider>
           <ToastProvider>
             <PWAInitializer />
-            {children}
+        {children}
             <ToastContainer />
             <InstallPromptBanner />
           </ToastProvider>

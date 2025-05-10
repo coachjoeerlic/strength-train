@@ -202,7 +202,7 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
       // setIsGifSearchOpen(false); // Optional: close panel if rate limited
       return;
     }
-
+    
     onSend(message, gif.media_formats.gif.url, 'gif');
     setMessage('');
     setIsGifSearchOpen(false);

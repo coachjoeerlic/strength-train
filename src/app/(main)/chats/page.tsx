@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/AuthContext';
 import NavBar from '@/components/NavBar';
 import ChatListItemSkeleton from '@/components/Skeletons/ChatListItemSkeleton';
+import { ShieldAlert } from 'lucide-react';
 
 type Chat = {
   id: string;
@@ -21,16 +22,45 @@ type Chat = {
 };
 
 export default function ChatsPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const [chats, setChats] = useState<Chat[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const ITEMS_PER_PAGE = 15;
 
-  const fetchChats = async (pageNum: number) => {
-    if (!user) return;
+  useEffect(() => {
+    const fetchAdminStatus = async () => {
+      if (user) {
+        try {
+          const { data: profile, error } = await supabase
+            .from('profiles')
+            .select('is_admin')
+            .eq('id', user.id)
+            .single();
+          if (error) throw error;
+          if (profile) {
+            setIsAdmin(profile.is_admin || false);
+          }
+        } catch (err) {
+          console.error("Error fetching admin status:", err);
+          setIsAdmin(false);
+        }
+      }
+    };
+    if (!authLoading) {
+      fetchAdminStatus();
+    }
+  }, [user, authLoading]);
+
+  const fetchChats = useCallback(async (pageNum: number) => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
 
     try {
       const { data, error } = await supabase
@@ -58,12 +88,10 @@ export default function ChatsPage() {
       if (error) throw error;
 
       const formattedChats = data.map(chat => {
-        // Get the latest message
         const latestMessage = chat.messages?.sort((a, b) => 
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         )[0] || null;
 
-        // Count unread messages
         const unreadCount = chat.unread_messages?.filter(m => !m.is_read).length || 0;
 
         return {
@@ -82,17 +110,17 @@ export default function ChatsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
-    if (!user) {
+    if (!authLoading && !user) {
       router.push('/login');
       return;
     }
-
+    if (user) {
     fetchChats(0);
+    }
 
-    // Subscribe to new messages
     const channel = supabase
       .channel('chat_updates')
       .on('postgres_changes', { 
@@ -100,14 +128,14 @@ export default function ChatsPage() {
         schema: 'public', 
         table: 'messages' 
       }, () => {
-        fetchChats(0); // Refresh the list when messages change
+        fetchChats(0);
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, router]);
+  }, [user, router, fetchChats]);
 
   const loadMore = () => {
     if (!hasMore || loading) return;
@@ -125,7 +153,7 @@ export default function ChatsPage() {
               <ChatListItemSkeleton key={index} />
             ))}
           </div>
-        </div>
+      </div>
         <NavBar />
       </main>
     );
@@ -134,7 +162,14 @@ export default function ChatsPage() {
   return (
     <main className="min-h-screen pb-20">
       <div className="max-w-md mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-6">Chats</h1>
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-bold">Chats</h1>
+          {isAdmin && (
+            <Link href="/admin/flags" className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" title="Admin Flag Portal">
+              <ShieldAlert className="h-6 w-6 text-orange-500" />
+            </Link>
+          )}
+        </div>
         
         <div className="space-y-2">
           {chats.map(chat => (

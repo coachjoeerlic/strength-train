@@ -25,6 +25,7 @@ export type Message = {
   is_read: boolean;
   reactions?: ReactionSummary[];
   is_pinned?: boolean;
+  is_hidden?: boolean;
 };
 
 export type ReactionSummary = {

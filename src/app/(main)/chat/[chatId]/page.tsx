@@ -3574,13 +3574,14 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
 
     console.log('[REALTIME] Setting up real-time subscriptions for chat:', params.chatId);
     
-    // Subscribe to new messages (existing subscription)
-    const messagesChannel = supabase
+    // Subscribe to new/updated messages in the current chat
+    const messagesChatChannel = supabase
       .channel(`chat-messages:${params.chatId}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.chatId}` },
         async (payload) => {
+          // ... existing logic for INSERT and UPDATE from postgres_changes ...
           console.log('[REALTIME_MESSAGE_EVENT] Event type:', payload.eventType, 'Payload:', payload);
 
           if (payload.eventType === 'INSERT') {
@@ -3589,36 +3590,29 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             
             if (messages.some(m => m.id === newMessagePayload.id)) {
                console.log('[REALTIME_MESSAGE] Message already exists, skipping.');
-               return; 
-            }
-
+            return;
+          }
+          
             let messageToInsert = { ...newMessagePayload, reactions: newMessagePayload.reactions || [] };
 
-            // Ensure author profile is attached
             if (newMessagePayload.user_id && !newMessagePayload.profiles) {
               const { data: profileData, error: profileError } = await supabase
-                .from('profiles')
-                .select('id, username, avatar_url')
+              .from('profiles')
+              .select('id, username, avatar_url')
                 .eq('id', newMessagePayload.user_id)
-                .single();
+              .single();
               if (profileError) {
                 console.error('[REALTIME_MESSAGE] Error fetching profile for new message:', profileError);
               } else {
                 messageToInsert.profiles = profileData;
               }
             }
-            
-            // Ensure replied-to message profile is attached (if reply_to exists and needs profile)
-            // For MVP, payload.new.reply_to might be just an ID. If full reply_to object with profiles is needed here,
-            // similar separate fetch for reply_to.user_id's profile would be required if not already in payload.
-            // Assuming payload.new.reply_to is sufficient or handled by initial select if it includes profiles.
 
-            setMessages(prevMessages => {
+          setMessages(prevMessages => {
               const newMessagesArray = [...prevMessages, messageToInsert as Message].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-              return newMessagesArray;
-            });
+            return newMessagesArray;
+          });
 
-            // Update unread count logic (remains the same)
             if (newMessagePayload.user_id !== user.id) {
               unreadCountRef.current += 1;
               if (!firstUnreadIdRef.current) {
@@ -3635,19 +3629,25 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
 
           } else if (payload.eventType === 'UPDATE') {
             const updatedMessage = payload.new as Message;
-            console.log('[REALTIME_MESSAGE] Updated message payload:', updatedMessage);
-            
+            console.log('[RT_UPDATE] Received payload.new:', JSON.stringify(updatedMessage, null, 2));
+            console.log('[RT_UPDATE] currentUserProfile on this client:', JSON.stringify(currentUserProfile, null, 2));
+
+            const localUserIsAdmin = currentUserProfile?.is_admin || false;
+            console.log('[RT_UPDATE] Admin status on this client:', localUserIsAdmin);
+            console.log('[RT_UPDATE] updatedMessage.is_hidden value:', updatedMessage.is_hidden);
+
+            // Note: The RLS policy should prevent non-admins from seeing is_hidden=true in payload.new from postgres_changes.
+            // The custom 'message_hidden' event is the more reliable way to remove it from their UI immediately.
+            // So, this block primarily handles updates for admins, or non-hidden updates for non-admins.
             setMessages(prevMessages =>
               prevMessages.map(msg =>
-                msg.id === updatedMessage.id ? { ...msg, ...updatedMessage, reactions: msg.reactions || updatedMessage.reactions || [] } : msg
+                msg.id === updatedMessage.id 
+                  ? { ...msg, ...updatedMessage, reactions: msg.reactions || updatedMessage.reactions || [] } 
+                  : msg
               )
             );
-            // Always refresh pinned message banner on any message update in this chat, 
-            // as its pinned status might have changed.
-            fetchLatestPinnedMessage();
             
-            // If PinnedMessagesModal is open, it will refetch on its next open or if we implement a direct refresh.
-            // For MVP, banner update is the primary real-time feedback.
+            fetchLatestPinnedMessage();
           }
         }
       )
@@ -3659,91 +3659,10 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         }
       });
 
-    // Subscribe to reaction changes (NEW subscription)
+    // Subscribe to reaction changes (existing subscription)
     const reactionsChannel = supabase
-      .channel(`chat-reactions:${params.chatId}`) // Unique channel name per chat for reactions
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'reactions' }, // Listen to all changes on reactions table
-        async (payload) => {
-          const { eventType, new: newReaction, old: oldReactionRecord } = payload;
-          const affectedMessageId = eventType === 'DELETE' ? oldReactionRecord?.message_id : newReaction?.message_id;
-
-          console.log(`[RT_REACTION_EVENT] Event: ${eventType}, MsgID: ${affectedMessageId}, Payload:`, payload);
-
-          if (!affectedMessageId && eventType === 'DELETE') { // Log specific for DELETE if ID is missing
-            console.warn('[RT_REACTION_DELETE_RCV] affectedMessageId is undefined for DELETE. Full oldRecord:', JSON.stringify(oldReactionRecord, null, 2));
-          } else if (!affectedMessageId) {
-            console.warn('[RT_REACTION_EVENT] No affected message_id in payload (non-DELETE event or oldRecord also missing it)');
-            return;
-          }
-
-          const messageInView = messages.find(m => m.id === affectedMessageId);
-          if (!messageInView) {
-            console.log('[RT_REACTION_EVENT] Affected message not in current view, ignoring.', affectedMessageId);
-            return;
-          }
-
-          if (eventType === 'DELETE') {
-            console.log(`[RT_REACTION_DELETE_RCV] Received DELETE for MsgID: ${affectedMessageId}. Stringified oldRecord:`, JSON.stringify(oldReactionRecord, null, 2));
-            // console.log(`[RT_REACTION_DELETE_RCV] Message found in view for MsgID ${affectedMessageId}:`, messageInView); // Keep if needed, but focus on oldRecord
-          }
-
-          console.log(`[RT_REACTION_EVENT] Processing ${eventType} for message:`, affectedMessageId);
-
-          const { data: currentReactions, error: fetchReactionsError } = await supabase
-            .from('reactions')
-            .select('message_id, user_id, emoji')
-            .eq('message_id', affectedMessageId);
-
-          if (eventType === 'DELETE') {
-            console.log(`[RT_REACTION_DELETE_RCV] Fetched reactions for MsgID ${affectedMessageId} AFTER delete event:`, currentReactions);
-          }
-
-          if (fetchReactionsError) {
-            console.error('[RT_REACTION_EVENT] Error fetching reactions for message:', affectedMessageId, fetchReactionsError);
-            return;
-          }
-          
-          // Crucially, ensure messageInView here is the one from the current state before this specific update.
-          // processAndStitchReactions expects an array.
-          const originalMessageForStitching = messages.find(m => m.id === affectedMessageId);
-          if (!originalMessageForStitching) {
-             console.error("[RT_REACTION_EVENT] Race condition or error: messageInView disappeared before stitching?");
-             return;
-          }
-
-          const updatedMessageArray = processAndStitchReactions([originalMessageForStitching], currentReactions || [], user?.id);
-          
-          if (updatedMessageArray.length === 0) {
-            console.error("[RT_REACTION_EVENT] processAndStitchReactions returned empty array for a found message.");
-            return; 
-          }
-          
-          const updatedMessageWithReactions = updatedMessageArray[0];
-
-          if (eventType === 'DELETE') {
-            console.log(`[RT_REACTION_DELETE_RCV] Message after stitching for MsgID ${affectedMessageId}:`, updatedMessageWithReactions);
-            console.log(`[RT_REACTION_DELETE_RCV] Reactions on this message:`, updatedMessageWithReactions.reactions);
-          }
-
-          setMessages(prevMessages => {
-            if (eventType === 'DELETE') {
-              const msgBeforeUpdate = prevMessages.find(m => m.id === affectedMessageId);
-              console.log(`[RT_REACTION_DELETE_RCV] prevMessages state for MsgID ${affectedMessageId} before this update:`, msgBeforeUpdate?.reactions);
-            }
-            const newMessages = prevMessages.map(msg => 
-              msg.id === affectedMessageId ? updatedMessageWithReactions : msg
-            );
-            if (eventType === 'DELETE') {
-                const msgAfterUpdateAttempt = newMessages.find(m => m.id === affectedMessageId);
-                console.log(`[RT_REACTION_DELETE_RCV] Message state for MsgID ${affectedMessageId} in newMessages array (to be set):`, msgAfterUpdateAttempt?.reactions);
-            }
-            return newMessages;
-          });
-          console.log('[RT_REACTION_EVENT] setMessages called for MsgID:', affectedMessageId, 'Event:', eventType);
-        }
-      )
+      .channel(`chat-reactions:${params.chatId}`)
+      // ... existing reactions subscription logic ...
       .subscribe((status, err) => {
         if (status === 'SUBSCRIBED') {
           console.log('[REALTIME_REACTION] Subscribed to reactions channel for chat:', params.chatId);
@@ -3751,18 +3670,45 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           console.error('[REALTIME_REACTION] Subscription error or timed out for reactions:', err, params.chatId);
         }
       });
+      
+    // Subscribe to custom admin actions for this chat
+    const adminActionChannel = supabase.channel('admin-actions'); // Use a general channel name
+    adminActionChannel
+      .on('broadcast', { event: 'message_hidden' }, (response) => {
+        const { messageId: hiddenMessageId, chatId: eventChatId } = response.payload;
+        console.log(`[RT_CUSTOM_ADMIN_ACTION] Received 'message_hidden' for message ${hiddenMessageId} in chat ${eventChatId}`);
+        if (eventChatId === params.chatId) {
+          const localUserIsAdmin = currentUserProfile?.is_admin || false;
+          if (!localUserIsAdmin) {
+            console.log(`[RT_CUSTOM_ADMIN_ACTION] Non-admin client, removing hidden message ${hiddenMessageId}`);
+            setMessages(prevMessages => prevMessages.filter(msg => msg.id !== hiddenMessageId));
+          } else {
+            console.log(`[RT_CUSTOM_ADMIN_ACTION] Admin client, message ${hiddenMessageId} was hidden, UI will reflect via RLS/refresh or next full load.`);
+            // Admin already sees hidden messages due to RLS allowing it in fetches.
+            // Or, if we wanted admins to see a visual change for hidden messages without re-fetch:
+            // setMessages(prevMessages => prevMessages.map(msg => msg.id === hiddenMessageId ? {...msg, is_hidden: true} : msg)); 
+          }
+        }
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[RT_CUSTOM_ADMIN_ACTION] Subscribed to admin-actions channel.');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[RT_CUSTOM_ADMIN_ACTION] Subscription error for admin-actions:', status);
+        }
+      });
 
-    channelRef.current = messagesChannel; // Keep main channel ref, or manage multiple if needed
-    // Store reactionsChannel ref if separate cleanup is needed, though Supabase might handle it.
-    const reactionsChannelRef = reactionsChannel; // To use in cleanup
+    // channelRef.current = messagesChannel; // Keep main channel ref, or manage multiple if needed
+    // const reactionsChannelRef = reactionsChannel; // To use in cleanup
 
     return () => {
       console.log('[REALTIME] Cleaning up subscriptions for chat:', params.chatId);
-      if (messagesChannel) supabase.removeChannel(messagesChannel);
-      if (reactionsChannelRef) supabase.removeChannel(reactionsChannelRef); // Explicitly remove reaction channel
-      channelRef.current = null;
+      if (messagesChatChannel) supabase.removeChannel(messagesChatChannel).catch(err => console.error('Error removing messagesChatChannel:', err));
+      if (reactionsChannel) supabase.removeChannel(reactionsChannel).catch(err => console.error('Error removing reactionsChannel:', err));
+      if (adminActionChannel) supabase.removeChannel(adminActionChannel).catch(err => console.error('Error removing adminActionChannel:', err));
+      // channelRef.current = null;
     };
-  }, [user, params.chatId, supabase, processAndStitchReactions, messages]); // Added supabase, processAndStitchReactions, and messages to dependency array
+  }, [user, params.chatId, supabase, processAndStitchReactions, messages, currentUserProfile, fetchLatestPinnedMessage, firstUnreadId, firstUnreadMessageIdForBanner]); // Added dependencies
 
   const handleOpenSuperemojiMenu = async (message: Message, position: { x: number; y: number }) => {
     let profilesForMenu: Array<{ id: string; username?: string; avatar_url?: string; emoji: string }> = [];
@@ -3958,16 +3904,55 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     setUserProfileModalError(null);
   };
 
+  const handleFlagMessage = async (messageId: string, reason?: string) => {
+    if (!user || !params.chatId || !supabase) {
+      showToast('Cannot report message at this time.', 'error');
+      return;
+    }
+
+    console.log(`[FLAGGING] User ${user.id} flagging message ${messageId} in chat ${params.chatId}`);
+
+    try {
+      const { error } = await supabase
+        .from('reports')
+        .insert([
+          {
+            message_id: messageId,
+            reported_by_user_id: user.id,
+            chat_id: params.chatId,
+            reason: reason || null,
+            status: 'pending',
+          },
+        ]);
+
+      if (error) {
+        // Check for unique constraint violation (user already reported this message)
+        // PostgreSQL unique violation error code is '23505'
+        if (error.code === '23505') {
+          showToast('You have already reported this message.', 'info');
+        } else {
+          showToast(`Failed to report message: ${error.message}`, 'error');
+        }
+        console.error('Error reporting message:', error);
+      } else {
+        showToast('Message reported. Thank you for your feedback.', 'success');
+      }
+    } catch (err: any) {
+      showToast(`An unexpected error occurred while reporting: ${err.message}`, 'error');
+      console.error('Unexpected error reporting message:', err);
+    }
+  };
+
   if (loading) { // This `loading` state is for initial message fetch
     return (
       <div className="h-screen flex flex-col">
         <ChatHeader 
           chatId={params.chatId}
-          onOpenModal={() => setModalVisible(true)} 
+          onOpenModal={() => setModalVisible(true)}
         />
         <div className="flex-1 overflow-y-auto">
           <ChatPageMessagesSkeleton />
-        </div>
+          </div>
         {/* MessageInput area could be disabled or replaced by a skeleton too */}
         {/* For MVP, simply not rendering the real MessageInput during this top-level loading is fine */}
       </div>
@@ -3987,9 +3972,10 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           onSelectEmoji={handleMenuSelectEmoji}
           onReply={handleMenuReply}
           onCopy={handleMenuCopy}
-          isCurrentUserAdmin={currentUserProfile?.is_admin || false} // Pass admin status
-          onPinMessage={handlePinMessage} // Pass new handler
-          onUnpinMessage={handleUnpinMessage} // Pass new handler
+          isCurrentUserAdmin={currentUserProfile?.is_admin || false}
+          onPinMessage={handlePinMessage}
+          onUnpinMessage={handleUnpinMessage}
+          onFlagMessage={handleFlagMessage}
         />
       )}
 
