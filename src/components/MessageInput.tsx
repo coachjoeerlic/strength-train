@@ -29,6 +29,7 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
   const [gifSearchQuery, setGifSearchQuery] = useState('');
   const [gifResults, setGifResults] = useState<GifResult[]>([]);
   const [isSearchingGifs, setIsSearchingGifs] = useState(false);
+  const [isSendDisabled, setIsSendDisabled] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout>();
 
@@ -43,6 +44,12 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+
+    if (isSendDisabled) {
+      showToast("Please wait a moment before sending another message.", 'info', 2000);
+      return;
+    }
+
     if (!message.trim() && !isUploading) return;
 
     // Clear typing status when sending a message
@@ -52,6 +59,11 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
 
     onSend(message);
     setMessage('');
+
+    setIsSendDisabled(true);
+    setTimeout(() => {
+      setIsSendDisabled(false);
+    }, 2000);
   };
 
   // Handle typing detection
@@ -184,11 +196,23 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
       removeTypingStatus(user.id, chatId);
     }
     
+    if (isSendDisabled) {
+      showToast("Please wait a moment before sending another message.", 'info', 2000);
+      // It might be better to also close the GIF search panel here if the send is blocked
+      // setIsGifSearchOpen(false); // Optional: close panel if rate limited
+      return;
+    }
+
     onSend(message, gif.media_formats.gif.url, 'gif');
     setMessage('');
     setIsGifSearchOpen(false);
     setGifSearchQuery('');
     setGifResults([]);
+
+    setIsSendDisabled(true);
+    setTimeout(() => {
+      setIsSendDisabled(false);
+    }, 2000);
   };
 
   return (
@@ -255,10 +279,10 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
         />
         <button
           type="submit"
-          disabled={(!message.trim() && !isUploading) || isUploading}
+          disabled={(!message.trim() && !isUploading) || isUploading || isSendDisabled}
           className="p-2 bg-blue-500 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-600 flex-shrink-0"
         >
-          {isUploading ? 'Uploading...' : 'Send'}
+          {isUploading ? 'Uploading...' : isSendDisabled ? 'Wait...' : 'Send'}
         </button>
         <input
           type="file"
