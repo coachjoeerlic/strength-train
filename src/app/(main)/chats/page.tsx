@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/AuthContext';
 import NavBar from '@/components/NavBar';
+import ChatListItemSkeleton from '@/components/Skeletons/ChatListItemSkeleton';
 
 type Chat = {
   id: string;
@@ -116,9 +117,17 @@ export default function ChatsPage() {
 
   if (loading && chats.length === 0) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-      </div>
+      <main className="min-h-screen pb-20">
+        <div className="max-w-md mx-auto p-4">
+          <h1 className="text-2xl font-bold mb-6">Chats</h1>
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <ChatListItemSkeleton key={index} />
+            ))}
+          </div>
+        </div>
+        <NavBar />
+      </main>
     );
   }
 

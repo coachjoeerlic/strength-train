@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/AuthContext';
 import NavBar from '@/components/NavBar';
 import ChatIconWithBadge from '@/components/ChatIconWithBadge';
+import { useToasts } from '@/contexts/ToastContext';
+import ProfilePageSkeleton from '@/components/Skeletons/ProfilePageSkeleton';
 
 type Profile = {
   username: string;
@@ -83,11 +85,7 @@ export default function ProfilePage() {
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-      </div>
-    );
+    return <ProfilePageSkeleton />;
   }
 
   return (

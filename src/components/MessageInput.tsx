@@ -4,6 +4,7 @@ import { useState, FormEvent, useRef, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { setTypingStatus, removeTypingStatus, cleanupTyping } from '@/lib/typingService';
 import { useAuth } from '@/lib/AuthContext';
+import { useToasts } from '@/contexts/ToastContext';
 
 interface MessageInputProps {
   onSend: (content: string, mediaUrl?: string, mediaType?: 'image' | 'video' | 'gif') => void;
@@ -23,7 +24,7 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
   const { user } = useAuth();
   const [message, setMessage] = useState('');
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const { showToast } = useToasts();
   const [isGifSearchOpen, setIsGifSearchOpen] = useState(false);
   const [gifSearchQuery, setGifSearchQuery] = useState('');
   const [gifResults, setGifResults] = useState<GifResult[]>([]);
@@ -72,19 +73,18 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
     // Validate file type
     const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'video/mp4', 'video/webm'];
     if (!validTypes.includes(file.type)) {
-      setUploadError('Invalid file type. Please select an image or video.');
+      showToast('Invalid file type. Please select an image or video.', 'error');
       return;
     }
 
     // Validate file size (10MB limit)
     const maxSize = 10 * 1024 * 1024; // 10MB
     if (file.size > maxSize) {
-      setUploadError('File is too large. Maximum size is 10MB.');
+      showToast('File is too large. Maximum size is 10MB.', 'error');
       return;
     }
 
     setIsUploading(true);
-    setUploadError(null);
 
     try {
       // Generate a unique file name
@@ -121,9 +121,9 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
       // Send message with media
       onSend(message, publicUrl, mediaType);
       setMessage('');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error uploading file:', error);
-      setUploadError('Failed to upload file. Please try again.');
+      showToast(error.message || 'Failed to upload file. Please try again.', 'error');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) {
@@ -140,7 +140,7 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
 
     const apiKey = process.env.NEXT_PUBLIC_TENOR_API_KEY;
     if (!apiKey) {
-      setUploadError('GIF search is not configured. Please contact support.');
+      showToast('GIF search is not configured. Please contact support.', 'error');
       return;
     }
 
@@ -158,7 +158,7 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
       setGifResults(data.results || []);
     } catch (error) {
       console.error('Error searching GIFs:', error);
-      setUploadError('Failed to search GIFs. Please try again.');
+      showToast('Failed to search GIFs. Please try again.', 'error');
       setGifResults([]);
     } finally {
       setIsSearchingGifs(false);
@@ -193,9 +193,6 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      {uploadError && (
-        <div className="text-red-500 text-sm">{uploadError}</div>
-      )}
       {isGifSearchOpen && (
         <div className="border rounded-lg p-4 bg-white shadow-lg">
           <input

@@ -13,6 +13,7 @@ import debounce from 'lodash.debounce';
 import React from 'react';
 import { isToday, format, startOfDay, isSameDay } from 'date-fns';
 import { addReaction, removeReaction } from '@/lib/reactionService';
+import { useToasts } from '@/contexts/ToastContext'; // Import useToasts
 
 // Add throb animation via a style tag in the component
 function addThrobAnimation() {
@@ -263,6 +264,7 @@ import ChatHeader from '@/components/ChatHeader';
 import UserModal from '@/components/UserModal';
 import UserProfileModal, { UserProfile } from '@/components/UserProfileModal'; // Import new modal and its Profile type
 import SuperemojiMenu from '@/components/SuperemojiMenu'; // Added
+import ChatPageMessagesSkeleton from '@/components/Skeletons/ChatPageMessagesSkeleton'; // Import skeleton
 
 export default function ChatPage({ params }: { params: { chatId: string } }) {
   const { user } = useAuth();
@@ -305,21 +307,23 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     reactingUsersProfiles?: Array<{ id: string; username?: string; avatar_url?: string; emoji: string }>; // Added
   }>({ isVisible: false, message: null, position: null, reactingUsersProfiles: [] });
 
-  // State for simple toast notifications
-  const [toast, setToast] = useState<{ message: string; isVisible: boolean; type: 'success' | 'error' }>({ message: '', isVisible: false, type: 'success' });
-  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const { showToast } = useToasts(); // Get global showToast
 
-  // Helper function to show a toast message
-  const showToast = (message: string, type: 'success' | 'error' = 'success', duration: number = 3000) => {
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-    }
-    setToast({ message, isVisible: true, type });
-    toastTimerRef.current = setTimeout(() => {
-      setToast({ message: '', isVisible: false, type: 'success' });
-      toastTimerRef.current = null;
-    }, duration);
-  };
+  // Remove local toast state and related refs/functions
+  // const [toast, setToast] = useState<{ message: string; isVisible: boolean; type: 'success' | 'error' }>({ message: '', isVisible: false, type: 'success' });
+  // const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Remove local showToast helper function
+  // const showToastLocal = (message: string, type: 'success' | 'error' = 'success', duration: number = 3000) => {
+  //   if (toastTimerRef.current) {
+  //     clearTimeout(toastTimerRef.current);
+  //   }
+  //   setToast({ message, isVisible: true, type });
+  //   toastTimerRef.current = setTimeout(() => {
+  //     setToast({ message: '', isVisible: false, type: 'success' });
+  //     toastTimerRef.current = null;
+  //   }, duration);
+  // };
 
   // Helper function to process raw reactions and stitch them to messages
   const processAndStitchReactions = useCallback((
@@ -816,11 +820,11 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             setHasNewer(false);
             return false;
           }
-        } catch (err) {
+        } catch (err: any) { // Typed err
           console.error('[PAGINATION] Error in fetchNewerMessages:', err);
-          setError('Failed to load newer messages');
+          showToast(err.message || 'Failed to load newer messages', 'error');
           setHasNewer(false);
-          throw err;
+          throw err; // Re-throw if other parts of the app expect to catch this too
         } finally {
           // Reset loading states
           isLoadingMoreRef.current = false;
@@ -1220,9 +1224,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         console.log('[PAGINATION] No messages found');
         setHasMore(false);
       }
-    } catch (err) {
+    } catch (err: any) { // Typed err
       console.error('[PAGINATION] Error fetching more messages:', err);
-      setError('Failed to load more messages');
+      showToast(err.message || 'Failed to load more messages', 'error');
       setHasMore(false);
     } finally {
       console.log('[PAGINATION] Finished loading more messages');
@@ -1720,9 +1724,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       });
       
       return true;
-    } catch (err) {
+    } catch (err: any) { // Typed err
       console.error('[CONTEXT_FETCH] General error in fetchMessageWithContext:', err);
-      setError('Failed to load the context for the message.');
+      showToast(err.message || 'Failed to load context for the message', 'error');
       return false;
     } finally {
       setLoadingContextForMessageId(null);
@@ -1833,11 +1837,11 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       // Clear jump history when sending a new message
       setJumpHistory([]);
       setReplyingTo(null);
-    } catch (err) {
+    } catch (err: any) { // Ensure this err is typed as any
       console.error('Error sending message:', err);
-      setError('Failed to send message');
+      showToast(err.message || 'Failed to send message', 'error');
     }
-  }, [user, params.chatId, replyingTo]);
+  }, [user, params.chatId, replyingTo, showToast]);
 
   // Fetch current user profile
   useEffect(() => {
@@ -3754,9 +3758,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       await navigator.clipboard.writeText(superemojiMenuState.message.content);
       console.log('[SuperemojiMenu] Message content copied to clipboard.');
       showToast('Copied to clipboard!', 'success');
-    } catch (err) {
+    } catch (err: any) { 
       console.error('[SuperemojiMenu] Failed to copy message content:', err);
-      showToast('Failed to copy', 'error');
+      showToast(err.message || 'Failed to copy', 'error');
     }
     handleCloseSuperemojiMenu();
   };
@@ -3802,19 +3806,18 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     setUserProfileModalError(null);
   };
 
-  if (loading) {
+  if (loading) { // This `loading` state is for initial message fetch
     return (
       <div className="h-screen flex flex-col">
         <ChatHeader 
           chatId={params.chatId}
-          onOpenModal={() => setModalVisible(true)}
+          onOpenModal={() => setModalVisible(true)} 
         />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="flex flex-col items-center">
-            <div className="w-8 h-8 border-t-2 border-blue-500 rounded-full animate-spin mb-2"></div>
-            <p className="text-gray-600">Loading messages...</p>
-          </div>
+        <div className="flex-1 overflow-y-auto">
+          <ChatPageMessagesSkeleton />
         </div>
+        {/* MessageInput area could be disabled or replaced by a skeleton too */}
+        {/* For MVP, simply not rendering the real MessageInput during this top-level loading is fine */}
       </div>
     );
   }
@@ -4024,14 +4027,14 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       />
 
       {/* Simple Toast Notification */}
-      {toast.isVisible && (
+      {/* {toast.isVisible && (
         <div 
           className={`fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-md shadow-lg text-white text-sm 
                       ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}
         >
           {toast.message}
         </div>
-      )}
+      )} */}
     </main>
   );
 } 
