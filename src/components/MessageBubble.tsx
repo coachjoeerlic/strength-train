@@ -87,6 +87,19 @@ export default function MessageBubble({
     message.content.length <= IS_SHORT_MESSAGE_THRESHOLD &&
     !message.media_url;
 
+  if (isOwnMessage && isShortTextMessage) {
+    console.log('[MessageBubble DEBUG SENDER SHORT]', {
+      messageId: message.id,
+      content: message.content,
+      contentLength: message.content?.length,
+      isShortTextMessage,
+      isOwnMessage,
+      timestampString: format(new Date(message.created_at), 'h:mm a'),
+      newTimeStampFontSize: 'text-[11px]',
+      newTimeStampColorClasses: isOwnMessage ? 'text-blue-200 opacity-90' : 'text-gray-400 opacity-90'
+    });
+  }
+
   const timeStampString = format(new Date(message.created_at), 'h:mm a');
   // Define new styles for timestamp
   const newTimeStampFontSize = 'text-[11px]'; // Slightly smaller font
@@ -390,9 +403,9 @@ export default function MessageBubble({
       
       {/* For other users, if their profile hasn't loaded yet to show username inside bubble, show a placeholder above */}
       {!isOwnMessage && !message.profiles?.username && (
-         <div className="text-xs text-gray-500 mb-1">
+      <div className="text-xs text-gray-500 mb-1">
           User
-        </div>
+      </div>
       )}
       
       <div className="flex items-end gap-2">
@@ -408,11 +421,11 @@ export default function MessageBubble({
                 className="w-8 h-8 rounded-full object-cover"
               />
             ) : (
-              <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center">
                 <span className="text-gray-600 text-xs">
                   {message.profiles?.username?.[0]?.toUpperCase() || '?'}
                 </span>
-              </div>
+            </div>
             )}
           </div>
         )}
@@ -494,10 +507,36 @@ export default function MessageBubble({
             )}
 
             {isShortTextMessage ? (
-              <div className="flex justify-between items-end">
-                {message.content && <p className="whitespace-pre-wrap break-all mr-2">{message.content}</p>}
+              <div>
+                {message.content && (
+                  <p 
+                    className="whitespace-pre-wrap break-all mr-2 min-w-0 inline"
+                    ref={(el) => {
+                      if (isOwnMessage && el && message.content === 'dope') {
+                        console.log('[MessageBubble DEBUG SENDER SHORT <p> (inline)]', {
+                          offsetWidth: el.offsetWidth,
+                          scrollWidth: el.scrollWidth,
+                          innerText: el.innerText,
+                          className: el.className,
+                        });
+                      }
+                    }}
+                  >
+                    {message.content}
+                  </p>
+                )}
                 <span 
-                  className={`${newTimeStampFontSize} ${newTimeStampColorClasses} whitespace-nowrap relative translate-y-1`}
+                  className={`${newTimeStampFontSize} ${newTimeStampColorClasses} whitespace-nowrap relative translate-y-1 inline-block`}
+                  ref={(el) => {
+                    if (isOwnMessage && isShortTextMessage && message.content === 'dope' && el) {
+                      console.log('[MessageBubble DEBUG SENDER SHORT <span> (inline-block)]', {
+                        offsetWidth: el.offsetWidth,
+                        scrollWidth: el.scrollWidth,
+                        innerText: el.innerText,
+                        className: el.className,
+                      });
+                    }
+                  }}
                 >
                   {timeStampString}
                 </span>
@@ -511,7 +550,7 @@ export default function MessageBubble({
                 </div>
               </>
             )}
-            
+
             {message.reactions && message.reactions.length > 0 && (
               <div className={`flex gap-1 mt-1 flex-wrap ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
                 {message.reactions.map((reaction: ReactionSummary) => (
