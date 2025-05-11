@@ -6,8 +6,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { useToasts } from '@/contexts/ToastContext';
 import { format } from 'date-fns';
-import { MessageCircle, AlertTriangle, ArrowLeft } from 'lucide-react';
-import { Message } from '@/types/message'; // For typing FetchedMessage
+import { MessageCircle, AlertTriangle, ArrowLeft, Users, UserCheck as RefreshIcon } from 'lucide-react';
+import Link from 'next/link';
 // import NavBar from '@/components/NavBar'; // Decide if NavBar is needed here or if admin has its own layout
 
 // Define a type for the reported item
@@ -274,23 +274,34 @@ export default function FlaggedMessagesPage() {
       {/* <NavBar /> */}
       <div className="max-w-4xl mx-auto bg-white dark:bg-gray-800 shadow-xl rounded-lg">
         <header className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
-          <div className="flex items-center">
+          <div className="flex items-center min-w-0">
             <button 
               onClick={() => router.push('/chats')} 
-              className="mr-3 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              className="mr-3 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex-shrink-0"
               aria-label="Back to chats"
             >
               <ArrowLeft className="h-5 w-5 text-gray-600 dark:text-gray-300" />
             </button>
-            <h1 className="text-xl font-semibold text-gray-800 dark:text-white">Flagged Messages Portal</h1>
+            <h1 className="text-xl font-semibold text-gray-800 dark:text-white truncate">Flagged Messages Portal</h1>
           </div>
-          <button 
-            onClick={fetchReportedMessages} 
-            disabled={isFetchingReports}
-            className="text-sm bg-blue-500 hover:bg-blue-600 text-white font-semibold py-1.5 px-3 rounded-md disabled:opacity-50"
-          >
-            {isFetchingReports ? 'Refreshing...' : 'Refresh List'}
-          </button>
+          <div className="flex items-center space-x-2 flex-shrink-0">
+            <Link href="/admin/ban" className="text-sm bg-purple-500 hover:bg-purple-600 text-white font-semibold py-1.5 px-3 rounded-md flex items-center" title="Manage User Bans">
+              <Users className="h-4 w-4 mr-1.5 flex-shrink-0" />
+              <span className="hidden sm:inline">Manage Bans</span>
+            </Link>
+            <button 
+              onClick={fetchReportedMessages} 
+              disabled={isFetchingReports}
+              className="text-sm bg-blue-500 hover:bg-blue-600 text-white font-semibold py-1.5 px-3 rounded-md disabled:opacity-50 flex items-center"
+            >
+              {isFetchingReports ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-1.5"></div>
+              ) : (
+                  <RefreshIcon className="h-4 w-4 mr-1.5" />
+              )}
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          </div>
         </header>
         
         <div className="p-6">

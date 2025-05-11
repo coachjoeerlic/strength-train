@@ -3621,7 +3621,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               setUnreadCount(unreadCountRef.current);
               if (!firstUnreadId) {
                  setFirstUnreadId(firstUnreadIdRef.current);
-              }
+        }
               if (!firstUnreadMessageIdForBanner) {
                 setFirstUnreadMessageIdForBanner(newMessagePayload.id);
               }
@@ -3687,7 +3687,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             // Admin already sees hidden messages due to RLS allowing it in fetches.
             // Or, if we wanted admins to see a visual change for hidden messages without re-fetch:
             // setMessages(prevMessages => prevMessages.map(msg => msg.id === hiddenMessageId ? {...msg, is_hidden: true} : msg)); 
-          }
+        }
         }
       })
       .subscribe((status) => {

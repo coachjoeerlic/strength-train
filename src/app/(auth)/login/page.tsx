@@ -31,20 +31,55 @@ export default function LoginPage() {
     setMessage(null);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
-      if (error) {
-        const authError = error as AuthError;
-        setMessage({ type: 'error', text: authError.message });
-      } else {
-        router.push('/profile');
+      if (authError) {
+        const typedAuthError = authError as AuthError;
+        setMessage({ type: 'error', text: typedAuthError.message });
+        setLoading(false);
+        return;
       }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'An unexpected error occurred' });
-    } finally {
+
+      if (authData.user) {
+        // Successful Supabase auth, now check profile for ban status
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('is_banned')
+          .eq('id', authData.user.id)
+          .single();
+
+        if (profileError) {
+          console.error("Error fetching profile for ban check:", profileError);
+          // Potentially sign out and show generic error, or let through for MVP if profile fetch fails?
+          // For MVP, let's show an error and prevent login if profile can't be checked.
+          await supabase.auth.signOut(); 
+          setMessage({ type: 'error', text: 'Could not verify account status. Please try again.' });
+          setLoading(false);
+          return;
+        }
+
+        if (profileData && profileData.is_banned) {
+          await supabase.auth.signOut(); // Sign out the just-authenticated user
+          setMessage({ type: 'error', text: 'Your account has been suspended. Please contact support.' });
+          setLoading(false);
+          return;
+        } else {
+          // Not banned or profile issue that we decided to let pass (if any)
+          router.push('/profile');
+          // setLoading will be handled by page navigation or can be set here if push is not immediate enough
+        }
+      } else {
+        // Should not happen if authError is null, but as a fallback
+        setMessage({ type: 'error', text: 'Login failed. Please try again.' });
+        setLoading(false);
+      }
+
+    } catch (error) { // Catch any other unexpected errors
+      console.error("Unexpected login error:", error);
+      setMessage({ type: 'error', text: 'An unexpected error occurred during login.' });
       setLoading(false);
     }
   };
