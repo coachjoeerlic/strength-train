@@ -28,14 +28,14 @@ export default function RootLayout({
         {/* <link rel="manifest" href="/manifest.json" /> */}
       </head>
       <body className={inter.className}>
-        <AuthProvider>
-          <ToastProvider>
+        <ToastProvider>
+          <AuthProvider>
             <PWAInitializer />
-        {children}
-            <ToastContainer />
+            {children}
             <InstallPromptBanner />
-          </ToastProvider>
-        </AuthProvider>
+          </AuthProvider>
+          <ToastContainer />
+        </ToastProvider>
       </body>
     </html>
   );

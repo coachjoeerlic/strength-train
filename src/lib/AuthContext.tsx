@@ -1,9 +1,10 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
-import { User, Session } from '@supabase/supabase-js';
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { User, Session, SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
 import { initPresence } from './presenceService';
+import { useToasts } from '@/contexts/ToastContext';
 
 type AuthContextType = {
   user: User | null;
@@ -17,6 +18,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { showToast } = useToasts();
 
   // Initialize presence tracking
   useEffect(() => {
@@ -122,6 +124,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     initializeAuth();
   }, []);
+
+  // New useEffect for user-specific realtime events (like account_banned)
+  useEffect(() => {
+    if (user && supabase) {
+      const userStatusChannelName = `user-status:${user.id}`;
+      console.log(`[AuthContext] Attempting to subscribe to: ${userStatusChannelName}`);
+      const channel: RealtimeChannel = supabase.channel(userStatusChannelName, {
+        config: {
+          broadcast: { ack: true }
+        }
+      });
+
+      channel
+        .on('broadcast', { event: 'account_banned' }, (response) => {
+          console.log(`[AuthContext] Received 'account_banned' event for user ${user.id}:`, response.payload);
+          showToast(response.payload?.message || 'Your account access has been revoked and you have been logged out.', 'error', 0);
+          
+          supabase.auth.signOut().catch(signOutError => {
+            console.error('[AuthContext] Error signing out after ban event:', signOutError);
+          });
+        })
+        .subscribe((status, err) => {
+          if (status === 'SUBSCRIBED') {
+            console.log(`[AuthContext] Successfully subscribed to ${userStatusChannelName}`);
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error(`[AuthContext] Failed to subscribe to ${userStatusChannelName}:`, err || status);
+          } else if (status === 'CLOSED') {
+            console.log(`[AuthContext] Channel ${userStatusChannelName} closed.`);
+          }
+        });
+
+      return () => {
+        console.log(`[AuthContext] Unsubscribing from ${userStatusChannelName}`);
+        supabase.removeChannel(channel).catch(removeErr => console.error(`[AuthContext] Error removing channel ${userStatusChannelName}:`, removeErr));
+      };
+    }
+  }, [user, supabase, showToast]);
 
   return (
     <AuthContext.Provider value={{ user, loading, error }}>

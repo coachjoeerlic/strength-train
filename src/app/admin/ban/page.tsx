@@ -127,9 +127,29 @@ export default function UserBanManagementPage() {
 
       showToast(`User "${targetUser.username}" has been banned successfully.`, 'success');
       setUsernameToBan('');
-      fetchBannedUsers();
+      fetchBannedUsers(); 
       
-      // TODO: Later, trigger immediate session invalidation for targetUser.id (Step 4.A)
+      if (supabase && targetUser && targetUser.id) {
+        const userSpecificChannelName = `user-status:${targetUser.id}`;
+        const userChannel = supabase.channel(userSpecificChannelName);
+        
+        console.log(`[ADMIN_BAN] Sending 'account_banned' event to channel: ${userSpecificChannelName}`);
+        userChannel.send({
+          type: 'broadcast',
+          event: 'account_banned',
+          payload: { 
+            message: 'Your account has been suspended by an administrator.',
+            bannedUserId: targetUser.id
+          }
+        })
+        .then((response) => { 
+            console.log('[ADMIN_BAN] \'account_banned\' event send acknowledged by server:', response);
+            // supabase.removeChannel(userChannel); // Optional: remove channel after sending
+        })
+        .catch((err) => { 
+            console.error("[ADMIN_BAN] Error sending \'account_banned\' event:", err);
+        });
+      }
 
     } catch (err: any) {
       console.error(`Error banning user ${usernameToBanTrimmed}:`, err);
