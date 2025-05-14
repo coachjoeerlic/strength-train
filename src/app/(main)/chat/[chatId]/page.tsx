@@ -3590,30 +3590,91 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             
             if (messages.some(m => m.id === newMessagePayload.id)) {
                console.log('[REALTIME_MESSAGE] Message already exists, skipping.');
-            return;
-          }
+               return;
+            }
           
-            let messageToInsert = { ...newMessagePayload, reactions: newMessagePayload.reactions || [] };
-
-            if (newMessagePayload.user_id && !newMessagePayload.profiles) {
-              const { data: profileData, error: profileError } = await supabase
-              .from('profiles')
-              .select('id, username, avatar_url')
-                .eq('id', newMessagePayload.user_id)
+            // Get the new message with complete reply information
+            const { data: messageData, error: messageError } = await supabase
+              .from('messages')
+              .select(`
+                *,
+                is_read,
+                reply_to:reply_to_message_id (
+                  content,
+                  user_id,
+                  media_url,
+                  media_type,
+                  is_read
+                )
+              `)
+              .eq('id', newMessagePayload.id)
               .single();
-              if (profileError) {
-                console.error('[REALTIME_MESSAGE] Error fetching profile for new message:', profileError);
-              } else {
-                messageToInsert.profiles = profileData;
+
+            if (messageError) {
+              console.error('[REALTIME_MESSAGE] Error fetching new message details:', messageError);
+              return;
+            }
+
+            if (!messageData) {
+              console.error('[REALTIME_MESSAGE] No message data returned');
+              return;
+            }
+
+            // Starting point for the transformed message
+            let messageToInsert: Message = { 
+              ...messageData, 
+              reactions: messageData.reactions || [] 
+            };
+
+            // Fetch profiles needed for the message
+            const profileIds = new Set<string>();
+            profileIds.add(messageData.user_id); // Main message sender
+            
+            // Add the original message sender if this is a reply
+            if (messageData.reply_to && messageData.reply_to.user_id) {
+              profileIds.add(messageData.reply_to.user_id);
+            }
+            
+            if (profileIds.size > 0) {
+              const { data: profilesData, error: profilesError } = await supabase
+                .from('profiles')
+                .select('id, username, avatar_url')
+                .in('id', Array.from(profileIds));
+                
+              if (profilesError) {
+                console.error('[REALTIME_MESSAGE] Error fetching profiles:', profilesError);
+              } else if (profilesData) {
+                const profilesMap = new Map(profilesData.map(p => [p.id, p]));
+                
+                // Set the main message sender's profile
+                if (messageData.user_id) {
+                  const senderProfile = profilesMap.get(messageData.user_id);
+                  if (senderProfile) {
+                    messageToInsert.profiles = senderProfile;
+                  }
+                }
+                
+                // Set the replied-to message sender's profile
+                if (messageToInsert.reply_to && messageToInsert.reply_to.user_id) {
+                  const replyUserProfile = profilesMap.get(messageToInsert.reply_to.user_id);
+                  if (replyUserProfile) {
+                    messageToInsert.reply_to = {
+                      ...messageToInsert.reply_to,
+                      profiles: replyUserProfile
+                    };
+                  }
+                }
               }
             }
 
-          setMessages(prevMessages => {
-              const newMessagesArray = [...prevMessages, messageToInsert as Message].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-            return newMessagesArray;
-          });
+            setMessages(prevMessages => {
+              const newMessagesArray = [...prevMessages, messageToInsert]
+                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+              return newMessagesArray;
+            });
 
-            if (newMessagePayload.user_id !== user.id) {
+            // Continue with the existing unread count logic for messages from others
+            if (newMessagePayload.user_id !== user?.id) {
               unreadCountRef.current += 1;
               if (!firstUnreadIdRef.current) {
                 firstUnreadIdRef.current = newMessagePayload.id;
@@ -3621,7 +3682,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               setUnreadCount(unreadCountRef.current);
               if (!firstUnreadId) {
                  setFirstUnreadId(firstUnreadIdRef.current);
-        }
+              }
               if (!firstUnreadMessageIdForBanner) {
                 setFirstUnreadMessageIdForBanner(newMessagePayload.id);
               }
@@ -4101,7 +4162,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       </div>
       
       {/* Message input area */}
-      <div className="flex-shrink-0 border-t bg-white">
+      <div className="flex-shrink-0 border-t bg-white pb-[50px]">
         <div className="max-w-2xl mx-auto px-4 py-2">
           {replyingTo && (
             <div className="p-2 bg-gray-100 rounded-lg flex justify-between items-center mb-2">

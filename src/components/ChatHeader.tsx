@@ -129,25 +129,32 @@ export default function ChatHeader({ chatId, onOpenModal }: ChatHeaderProps) {
   return (
     <header className="sticky top-0 z-20 border-b bg-white p-3 shadow-sm">
       <div className="flex items-center justify-between max-w-2xl mx-auto">
-        <div className="flex items-center">
+        {/* Left: Back button */}
+        <div className="flex-none">
           <button 
             onClick={handleBack}
-            className="mr-3 p-1 rounded-full hover:bg-gray-100 transition-colors"
+            className="p-1 rounded-full hover:bg-gray-100 transition-colors"
             aria-label="Back to chats"
           >
             <ArrowLeft className="h-5 w-5 text-gray-600" />
           </button>
+        </div>
+        
+        {/* Center: Chat title */}
+        <div className="flex-1 flex justify-center">
           <button
             onClick={onOpenModal}
             className="flex items-center space-x-2 hover:bg-gray-50 px-2 py-1 rounded-lg transition-colors"
             title="View chat members"
           >
-            <h1 className="font-semibold text-lg truncate max-w-[180px] sm:max-w-[250px]">
+            <h1 className="font-semibold text-lg truncate max-w-[180px] sm:max-w-[250px] text-center">
               {isLoading ? 'Loading...' : chatTitle}
             </h1>
           </button>
         </div>
-        <div>
+        
+        {/* Right: Member count */}
+        <div className="flex-none">
           <button
             onClick={onOpenModal}
             className="flex items-center space-x-1 text-gray-600 hover:bg-gray-50 px-2 py-1 rounded-md transition-colors"
