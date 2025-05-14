@@ -229,14 +229,30 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [selectedProgram, setSelectedProgram] = useState<Program | null>(null);
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null);
-  const [watchedVideos, setWatchedVideos] = useState<Set<string>>(() => {
-    const saved = localStorage.getItem(WATCHED_VIDEOS_KEY);
-    return new Set(saved ? JSON.parse(saved) : []);
-  });
+  const [watchedVideos, setWatchedVideos] = useState<Set<string>>(new Set([]));
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   
+  // Initialize watched videos from localStorage (client-side only)
   useEffect(() => {
-    localStorage.setItem(WATCHED_VIDEOS_KEY, JSON.stringify([...watchedVideos]));
+    try {
+      const saved = localStorage.getItem(WATCHED_VIDEOS_KEY);
+      if (saved) {
+        setWatchedVideos(new Set(JSON.parse(saved)));
+      }
+    } catch (error) {
+      console.error('Error loading watched videos from localStorage:', error);
+    }
+  }, []);
+  
+  // Save watched videos to localStorage (client-side only)
+  useEffect(() => {
+    try {
+      if (watchedVideos.size > 0) {
+        localStorage.setItem(WATCHED_VIDEOS_KEY, JSON.stringify([...watchedVideos]));
+      }
+    } catch (error) {
+      console.error('Error saving watched videos to localStorage:', error);
+    }
   }, [watchedVideos]);
 
   const handleVideoComplete = () => {
