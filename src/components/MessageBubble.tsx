@@ -447,7 +447,7 @@ export default function MessageBubble({
         <div className={`flex flex-col max-w-[85%] ${isOwnMessage ? 'items-end ml-auto' : 'items-start'}`}>
           {message.reply_to && (
             <div 
-              className="bg-gray-50 p-2 rounded-lg mb-1 text-sm text-gray-600 cursor-pointer flex items-center gap-2"
+              className="bg-gray-50 p-2 rounded-lg mb-1 text-sm text-gray-600 cursor-pointer flex items-center gap-2 select-none"
               onClick={handleReplyPreviewClick}
             >
               {message.reply_to.media_url && (
@@ -484,7 +484,7 @@ export default function MessageBubble({
           <div 
             className={`rounded-lg ${isOwnMessage ? 'bg-blue-500 text-white rounded-br-none' : 'bg-gray-200 text-gray-800 rounded-bl-none'} ${
               isReplyJumpTarget ? 'border-2 border-blue-400' : ''
-            } relative group cursor-pointer ${isOwnMessage ? 'p-3' : 'pt-1.5 pb-3 px-3'}`}
+            } relative group cursor-pointer select-none ${isOwnMessage ? 'p-3' : 'pt-1.5 pb-3 px-3'}`}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
@@ -501,7 +501,7 @@ export default function MessageBubble({
               <button
                 type="button"
                 onClick={() => onAvatarClick && onAvatarClick(message.user_id)}
-                className={`appearance-none text-left mb-1 text-sm font-semibold cursor-pointer focus:outline-none hover:underline ${getUserColor(message.user_id)}`}
+                className={`appearance-none text-left mb-1 text-sm font-semibold cursor-pointer focus:outline-none hover:underline ${getUserColor(message.user_id)} select-none`}
               >
                 {message.profiles.username}
               </button>
@@ -511,7 +511,7 @@ export default function MessageBubble({
               <div> 
                 {message.content && (
                   <p 
-                    className="whitespace-pre-wrap break-all mr-2 min-w-0 inline"
+                    className="whitespace-pre-wrap break-all mr-2 min-w-0 inline select-none"
                     ref={(el) => {
                       if (isOwnMessage && el && message.content === 'dope') { 
                         console.log('[MessageBubble DEBUG SENDER SHORT <p> (inline)]', {
@@ -527,17 +527,17 @@ export default function MessageBubble({
                   </p>
                 )}
                 {/* Wrapper for pin icon and timestamp for short messages */}
-                <div className={`inline-flex items-center relative translate-y-1 whitespace-nowrap ${newTimeStampFontSize} ${newTimeStampColorClasses}`}>
+                <div className={`inline-flex items-center relative translate-y-1 whitespace-nowrap ${newTimeStampFontSize} ${newTimeStampColorClasses} select-none`}>
                   {message.is_pinned && <PinIcon className="h-3.5 w-3.5 mr-1 text-yellow-500 flex-shrink-0" />}
                   <span>{timeStampString}</span>
                 </div>
               </div>
             ) : (
               <>
-                {message.content && <p className="whitespace-pre-wrap break-all">{message.content}</p>}
+                {message.content && <p className="whitespace-pre-wrap break-all select-none">{message.content}</p>}
                 {message.media_url && renderMedia()}
                 {/* Timestamp and optional pin icon for long messages */}
-                <div className={`${newTimeStampFontSize} ${newTimeStampColorClasses} mt-1 text-right flex items-center justify-end`}>
+                <div className={`${newTimeStampFontSize} ${newTimeStampColorClasses} mt-1 text-right flex items-center justify-end select-none`}>
                   {message.is_pinned && <PinIcon className="h-3.5 w-3.5 mr-1 text-yellow-500 flex-shrink-0" />}
                   <span>{timeStampString}</span>
                 </div>
@@ -550,7 +550,7 @@ export default function MessageBubble({
                   <button 
                     key={reaction.emoji}
                     onClick={() => handleToggleReaction(reaction.emoji)}
-                    className={`text-xs px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors
+                    className={`text-xs px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors select-none
                                 ${reaction.reactedByCurrentUser 
                                   ? 'bg-blue-500 text-white hover:bg-blue-600' 
                                   : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
