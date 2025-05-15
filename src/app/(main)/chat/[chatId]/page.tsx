@@ -3826,16 +3826,19 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen to INSERT, UPDATE, DELETE
+          event: '*', 
           schema: 'public',
           table: 'reactions',
-          filter: `chat_id=eq.${params.chatId}`, // Assuming reactions table has chat_id
+          // filter: `chat_id=eq.${params.chatId}`, // Temporarily removed for debugging
         },
         async (payload) => {
-          console.log('[REALTIME_REACTION] Payload received:', payload);
+          console.log('[REALTIME_REACTION_DEBUG] Raw Payload received:', JSON.stringify(payload, null, 2));
 
           const { eventType, new: newRecord, old: oldRecord, table } = payload;
-          if (table !== 'reactions') return;
+          if (table !== 'reactions') {
+            console.log('[REALTIME_REACTION_DEBUG] Ignoring payload for table:', table);
+            return;
+          }
 
           let messageId: string | undefined;
           let reactionUserId: string | undefined;
@@ -3848,38 +3851,34 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             reactionUserId = newRecord.user_id;
             emoji = newRecord.emoji;
             isInsert = true;
-            console.log('[REALTIME_REACTION] INSERT detected:', { messageId, reactionUserId, emoji });
+            console.log('[REALTIME_REACTION_DEBUG] Event Type: INSERT', { messageId, reactionUserId, emoji, newRecord });
           } else if (eventType === 'DELETE' && oldRecord) {
             messageId = oldRecord.message_id;
             reactionUserId = oldRecord.user_id;
             emoji = oldRecord.emoji;
             isDelete = true;
-            console.log('[REALTIME_REACTION] DELETE detected:', { messageId, reactionUserId, emoji });
+            console.log('[REALTIME_REACTION_DEBUG] Event Type: DELETE', { messageId, reactionUserId, emoji, oldRecord });
           } else if (eventType === 'UPDATE' && newRecord && oldRecord) {
-            // Handle updates if necessary, e.g. if an emoji could be changed
-            // For now, we can treat it like a delete of old and insert of new if they differ significantly
-            // or just re-fetch/re-process the specific message's reactions.
-            // Simpler: focus on insert/delete as primary RT events for reactions.
-             console.log('[REALTIME_REACTION] UPDATE detected (not fully handled, inspect if needed):', { newRecord, oldRecord });
-             // Potentially, re-fetch all reactions for the message for simplicity on UPDATE
-             // For now, this example will primarily focus on INSERT and DELETE
-             messageId = newRecord.message_id || oldRecord.message_id;
-             // To handle UPDATE robustly, one might need to re-fetch all reactions for the messageId
-             // or implement more complex diffing. Let's try re-fetching.
-             if (messageId) {
+            console.log('[REALTIME_REACTION_DEBUG] Event Type: UPDATE', { newRecord, oldRecord });
+            messageId = newRecord.message_id || oldRecord.message_id;
+            if (messageId && user?.id) { // Ensure user ID is available for processing
+                console.log(`[REALTIME_REACTION_DEBUG] UPDATE: Re-fetching reactions for messageId: ${messageId}`);
                 const { data: updatedMessageReactions, error: fetchError } = await supabase
                     .from('reactions')
                     .select('user_id, emoji')
                     .eq('message_id', messageId);
 
                 if (fetchError) {
-                    console.error('[REALTIME_REACTION] UPDATE: Error fetching reactions for message:', messageId, fetchError);
+                    console.error('[REALTIME_REACTION_DEBUG] UPDATE: Error re-fetching reactions:', messageId, fetchError);
                     return;
                 }
+                console.log('[REALTIME_REACTION_DEBUG] UPDATE: Fetched reactions data:', updatedMessageReactions);
                 
-                setMessages(prevMessages =>
-                  prevMessages.map(msg => {
+                setMessages(prevMessages => {
+                  console.log(`[REALTIME_REACTION_DEBUG] UPDATE: prevMessages count: ${prevMessages.length}`);
+                  const updatedMsgs = prevMessages.map(msg => {
                     if (msg.id === messageId) {
+                      console.log(`[REALTIME_REACTION_DEBUG] UPDATE: Found message ${messageId} to update reactions.`);
                       const newReactionSummaries: ReactionSummary[] = [];
                       const reactionsByEmoji = (updatedMessageReactions || []).reduce((acc, reaction) => {
                         acc[reaction.emoji] = acc[reaction.emoji] || { userIds: [], count: 0 };
@@ -3893,7 +3892,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                         newReactionSummaries.push({
                           emoji: emojiKey,
                           count: count,
-                          reactedByCurrentUser: user?.id ? reactingUserIds.includes(user.id) : false,
+                          reactedByCurrentUser: user.id ? reactingUserIds.includes(user.id) : false, // Added null check for user.id although it's checked above
                           userIds: reactingUserIds,
                         });
                       }
@@ -3901,82 +3900,107 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                         if (b.count !== a.count) return b.count - a.count;
                         return a.emoji.localeCompare(b.emoji);
                       });
-                      console.log('[REALTIME_REACTION] UPDATE: Updating reactions for message', messageId, newReactionSummaries);
+                      console.log('[REALTIME_REACTION_DEBUG] UPDATE: Updating reactions for message', messageId, newReactionSummaries);
                       return { ...msg, reactions: newReactionSummaries };
                     }
                     return msg;
-                  })
-                );
+                  });
+                  console.log('[REALTIME_REACTION_DEBUG] UPDATE: Messages processed for reaction update.');
+                  return updatedMsgs;
+                });
+             } else {
+                console.log('[REALTIME_REACTION_DEBUG] UPDATE: Skipped due to missing messageId or user.id', { messageId, userId: user?.id });
              }
-             return; // Early return after handling UPDATE with re-fetch
+             return; 
           } else {
-            return; // Not an event type we're handling for reactions
+            console.log('[REALTIME_REACTION_DEBUG] Ignoring eventType:', eventType);
+            return; 
           }
 
-          // Ensure all key fields are defined before proceeding
           if (!messageId || !reactionUserId || !emoji) {
-            console.warn('[REALTIME_REACTION] Insufficient data in payload to process reaction event:', payload);
+            console.warn('[REALTIME_REACTION_DEBUG] Insufficient data after parsing event. Payload:', JSON.stringify(payload, null, 2));
             return;
           }
 
-          setMessages(prevMessages =>
-            prevMessages.map(msg => {
+          console.log(`[REALTIME_REACTION_DEBUG] Processing ${isInsert ? 'INSERT' : 'DELETE'} for msg ${messageId}, user ${reactionUserId}, emoji ${emoji}`);
+
+          setMessages(prevMessages => {
+            console.log(`[REALTIME_REACTION_DEBUG] setMessages callback. prevMessages count: ${prevMessages.length}`);
+            let messageFound = false;
+            const newMessages = prevMessages.map(msg => {
               if (msg.id === messageId) {
-                const currentReactions = msg.reactions ? [...msg.reactions] : [];
-                let reactionSummary = currentReactions.find(r => r.emoji === emoji);
-                let summaryIndex = currentReactions.findIndex(r => r.emoji === emoji);
+                messageFound = true;
+                console.log('[REALTIME_REACTION_DEBUG] Found target message:', msg.id, 'Current reactions:', JSON.stringify(msg.reactions, null, 2));
+                const currentReactions = msg.reactions ? JSON.parse(JSON.stringify(msg.reactions)) : []; // Deep copy to avoid direct state mutation
+                let reactionSummary = currentReactions.find((r: ReactionSummary) => r.emoji === emoji);
+                let summaryIndex = currentReactions.findIndex((r: ReactionSummary) => r.emoji === emoji);
 
                 if (isInsert) {
-                  // reactionUserId, emoji are confirmed to be strings here due to the earlier check
-                  if (reactionSummary && reactionSummary.userIds) { // Check if userIds array exists
-                    // Emoji summary exists, update it
+                  console.log('[REALTIME_REACTION_DEBUG] Handling INSERT logic.');
+                  if (reactionSummary && reactionSummary.userIds) { 
                     if (!reactionSummary.userIds.includes(reactionUserId as string)) {
                       reactionSummary.userIds.push(reactionUserId as string);
                       reactionSummary.count += 1;
                       if (reactionUserId === user?.id) {
                         reactionSummary.reactedByCurrentUser = true;
                       }
+                      console.log('[REALTIME_REACTION_DEBUG] INSERT: Updated existing summary:', reactionSummary);
+                    } else {
+                      console.log('[REALTIME_REACTION_DEBUG] INSERT: User already in summary, no change to counts/IDs.');
                     }
                   } else if (reactionSummary && !reactionSummary.userIds) {
-                    // Edge case: summary exists but no userIds array (should not happen with proper init)
                     reactionSummary.userIds = [reactionUserId as string];
                     reactionSummary.count = 1;
                     if (reactionUserId === user?.id) {
                       reactionSummary.reactedByCurrentUser = true;
                     }
+                    console.log('[REALTIME_REACTION_DEBUG] INSERT: Initialized userIds for existing summary:', reactionSummary);
                   } else {
-                    // New emoji summary, reactionUserId and emoji are confirmed strings
-                    currentReactions.push({
-                      emoji: emoji as string, // Cast for safety, though earlier check should suffice
+                    const newSummary = {
+                      emoji: emoji as string, 
                       count: 1,
                       reactedByCurrentUser: reactionUserId === user?.id,
                       userIds: [reactionUserId as string],
-                    });
+                    };
+                    currentReactions.push(newSummary);
+                    console.log('[REALTIME_REACTION_DEBUG] INSERT: Created new summary:', newSummary);
                   }
                 } else if (isDelete) {
-                  if (reactionSummary) {
-                    reactionSummary.userIds = reactionSummary.userIds.filter(uid => uid !== reactionUserId);
-                    reactionSummary.count -= 1;
+                  console.log('[REALTIME_REACTION_DEBUG] Handling DELETE logic.');
+                  if (reactionSummary && reactionSummary.userIds) {
+                    const initialUserIdsCount = reactionSummary.userIds.length;
+                    reactionSummary.userIds = reactionSummary.userIds.filter((uid: string) => uid !== reactionUserId);
+                    if (reactionSummary.userIds.length < initialUserIdsCount) { // Only decrement if user was actually removed
+                        reactionSummary.count = Math.max(0, reactionSummary.count - 1);
+                    }
                     if (reactionUserId === user?.id) {
                       reactionSummary.reactedByCurrentUser = false;
                     }
+                    console.log('[REALTIME_REACTION_DEBUG] DELETE: Updated summary:', reactionSummary);
                     if (reactionSummary.count <= 0 && summaryIndex !== -1) {
-                      currentReactions.splice(summaryIndex, 1); // Remove summary if count is 0
+                      currentReactions.splice(summaryIndex, 1); 
+                      console.log('[REALTIME_REACTION_DEBUG] DELETE: Removed summary as count is 0.');
                     }
+                  } else {
+                     console.log('[REALTIME_REACTION_DEBUG] DELETE: No reaction summary found or userIds missing for emoji:', emoji);
                   }
                 }
                 
-                // Sort reactions for consistent display
-                currentReactions.sort((a, b) => {
+                currentReactions.sort((a: ReactionSummary, b: ReactionSummary) => {
                   if (b.count !== a.count) return b.count - a.count;
                   return a.emoji.localeCompare(b.emoji);
                 });
-                console.log('[REALTIME_REACTION] Updating message:', messageId, 'with new reactions:', currentReactions);
+                console.log('[REALTIME_REACTION_DEBUG] Message ', msg.id, ' updated reactions:', JSON.stringify(currentReactions, null, 2));
                 return { ...msg, reactions: currentReactions };
               }
               return msg;
-            })
-          );
+            });
+            if (!messageFound) {
+              console.warn('[REALTIME_REACTION_DEBUG] Target messageId not found in state:', messageId);
+            }
+            console.log('[REALTIME_REACTION_DEBUG] Returning newMessages. Length:', newMessages.length);
+            return newMessages;
+          });
         }
       )
       .subscribe((status, err) => {
