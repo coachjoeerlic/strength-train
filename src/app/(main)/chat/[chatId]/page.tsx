@@ -3913,8 +3913,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             return; // Not an event type we're handling for reactions
           }
 
+          // Ensure all key fields are defined before proceeding
           if (!messageId || !reactionUserId || !emoji) {
-            console.warn('[REALTIME_REACTION] Insufficient data in payload:', payload);
+            console.warn('[REALTIME_REACTION] Insufficient data in payload to process reaction event:', payload);
             return;
           }
 
