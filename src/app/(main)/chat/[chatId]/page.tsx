@@ -3823,7 +3823,88 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     // Subscribe to reaction changes (existing subscription)
     const reactionsChannel = supabase
       .channel(`chat-reactions:${params.chatId}`)
-      // ... existing reactions subscription logic ...
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to all changes (INSERT, UPDATE, DELETE)
+          schema: 'public',
+          table: 'reactions',
+          filter: `chat_id=eq.${params.chatId}` // Assuming reactions table has chat_id
+        },
+        async (payload: { eventType: 'INSERT' | 'UPDATE' | 'DELETE'; new: any; old: any; table: string; schema: string; commit_timestamp: string; errors: any[] | null }) => {
+          console.log('[REALTIME_REACTION] Reaction payload received:', payload);
+
+          let affectedMessageId: string | undefined;
+          let record = payload.new; // For INSERT, UPDATE
+
+          if (payload.eventType === 'DELETE') {
+            record = payload.old;
+          }
+
+          affectedMessageId = record?.message_id;
+
+          if (!affectedMessageId) {
+            console.error('[REALTIME_REACTION] No message_id in reaction payload', payload);
+            return;
+          }
+
+          // Check if the message is part of the current view. 
+          // Accessing 'messages' directly here creates a stale closure if not handled carefully.
+          // Using setMessages functional update form is better.
+          let messageIsRelevant = false;
+          setMessages(prevMessages => {
+            messageIsRelevant = prevMessages.some(m => m.id === affectedMessageId);
+            return prevMessages; // No actual state change here, just checking relevance
+          });
+
+          if (!messageIsRelevant) {
+            console.log('[REALTIME_REACTION] Reaction for message_id', affectedMessageId, 'not in current view. Skipping UI update.');
+            return;
+          }
+
+          try {
+            // Fetch all current reactions for the specific message_id
+            const { data: currentReactionsForMessage, error: fetchError } = await supabase
+              .from('reactions')
+              .select('message_id, user_id, emoji') // Ensure these match what processAndStitchReactions expects
+              .eq('message_id', affectedMessageId);
+
+            if (fetchError) {
+              console.error('[REALTIME_REACTION] Error fetching reactions for message:', affectedMessageId, fetchError);
+              return;
+            }
+            
+            console.log('[REALTIME_REACTION] Fetched current reactions for message', affectedMessageId, ':', currentReactionsForMessage);
+
+            setMessages(prevMessages => {
+              const messageIndex = prevMessages.findIndex(m => m.id === affectedMessageId);
+              if (messageIndex === -1) {
+                // Message might have been removed from state by another process
+                console.warn('[REALTIME_REACTION] Affected message_id', affectedMessageId, 'not found in prevMessages during update.');
+                return prevMessages; 
+              }
+
+              const affectedMessage = prevMessages[messageIndex];
+              
+              // Use the existing utility to process and stitch reactions onto this single message
+              const [updatedMessageWithReactions] = processAndStitchReactions(
+                [affectedMessage], // processAndStitchReactions expects an array of messages
+                currentReactionsForMessage || [], // Pass an empty array if no reactions are found (e.g., all deleted)
+                user?.id // currentUserId for determining reactedByCurrentUser
+              );
+
+              const newMessages = [...prevMessages];
+              newMessages[messageIndex] = updatedMessageWithReactions;
+              
+              console.log('[REALTIME_REACTION] Updating message in state with new reactions. Message ID:', affectedMessageId, 'New Reactions:', updatedMessageWithReactions.reactions);
+              return newMessages;
+            });
+
+          } catch (error) {
+            console.error('[REALTIME_REACTION] Error processing reaction update for message_id', affectedMessageId, error);
+          }
+        }
+      )
       .subscribe((status, err) => {
         if (status === 'SUBSCRIBED') {
           console.log('[REALTIME_REACTION] Subscribed to reactions channel for chat:', params.chatId);
