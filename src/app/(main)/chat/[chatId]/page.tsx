@@ -3566,7 +3566,6 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       needsScrollAdjustmentRef.current = false; 
 
       if (capturedAnchorIdFromRef) {
-        // No requestAnimationFrame needed here, useLayoutEffect is synchronous pre-paint.
         const { id: anchorId, offset: anchorOffsetTop } = anchorScrollInfoRef.current; 
         const newAnchorEl = document.getElementById(`message-${anchorId}`); 
         
@@ -3604,23 +3603,12 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           console.log('[ANCHOR_LAYOUT_EFFECT] No anchorId found for adjustment. Resetting loading flags.', { capturedAnchorIdFromRef });
           anchorScrollInfoRef.current = { id: null, offset: 0 };
           isLoadingMoreRef.current = false;
-          fetchState.current = 'idle';
+          fetchState.current = 'idle'; // Ensure state is reset even if no anchor was found but adjustment was requested
       }
-    } else if (!needsScrollAdjustmentRef.current && fetchState.current === 'updating' && !isLoadingMoreRef.current) {
-      // This handles cases where a fetch completed (e.g., fetchNewerMessages or an older fetch that added no messages or found no anchor)
-      // and set fetchState to 'updating', but didn't queue a scroll adjustment. We need to reset to idle.
-      // However, this should ideally be handled more directly by those functions or a more robust state machine.
-      // For now, let's ensure that if a fetch set `isLoadingMoreRef.current = true` and `fetchState = 'fetching'`, 
-      // and it transitions to `fetchState = 'updating'` but doesn't trigger scroll adjustment, it still gets reset.
-      // The current logic for `isLoadingMoreRef` might already cover this if it's always reset with fetchState.
-      // The primary path for fetchMoreMessages now resets these in the `if (capturedAnchorIdFromRef)` block.
-      // Let's log if this path is hit to see if it's necessary or if other paths correctly reset state.
-      console.log('[ANCHOR_LAYOUT_EFFECT] State check: needsAdjustment=false, fetchState=updating, isLoadingMore=false. Ensuring idle.', { fetchState_before: fetchState.current });
-      // fetchState.current = 'idle'; // Potentially redundant if isLoadingMoreRef and fetchState are paired.
-    }
+    } 
+    // The problematic `else if` block that was here has been removed.
   }, [messages]); // Dependency on messages is crucial.
 
-  // useEffect
   useEffect(() => {
     addThrobAnimation();
 
