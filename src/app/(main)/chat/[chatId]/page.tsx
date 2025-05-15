@@ -3645,38 +3645,73 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             console.log('[REALTIME_MESSAGE] Raw INSERT received:', newMessagePayload);
 
             (async () => {
-              const { data: messageData, error: messageError } = await supabase
+              // SIMPLIFIED SELECT (Step 1: Get message and direct profile)
+              const { data: msgWithDirectProfile, error: msgErr } = await supabase
                 .from('messages')
                 .select(`
                   *,
                   is_read,
-                  profiles:user_id (username, avatar_url),
-                  reply_to:reply_to_message_id (
-                      content,
-                      user_id,
-                      media_url,
-                      media_type,
-                      is_read,
-                      profiles:user_id (username, avatar_url)
-                  )
+                  profiles!inner(id, username, avatar_url)
                 `)
                 .eq('id', newMessagePayload.id)
                 .single();
 
-              if (messageError || !messageData) {
-                console.error('[REALTIME_MESSAGE] Error fetching full new message or message not found for ID:', newMessagePayload.id, messageError);
+              if (msgErr || !msgWithDirectProfile) {
+                console.error('[REALTIME_MESSAGE] Error fetching message with direct profile for ID:', newMessagePayload.id, msgErr);
                 return;
               }
-              
-              const fullMessageToInsert = { ...messageData, reactions: messageData.reactions || [] } as Message;
-              // The profiles should be included from the join now.
+              console.log('[REALTIME_MESSAGE] Fetched msgWithDirectProfile:', msgWithDirectProfile);
 
+              let fullMessageToInsert = { 
+                ...msgWithDirectProfile, 
+                reactions: msgWithDirectProfile.reactions || [], 
+                profiles: msgWithDirectProfile.profiles ? {
+                    // id: (msgWithDirectProfile.profiles as any).id, // Not needed in Message.profiles type
+                    username: (msgWithDirectProfile.profiles as any).username,
+                    avatar_url: (msgWithDirectProfile.profiles as any).avatar_url
+                } : undefined,
+                reply_to: undefined 
+              } as Message;
+
+              if (msgWithDirectProfile.reply_to_message_id) {
+                console.log('[REALTIME_MESSAGE] Message is a reply, fetching original. Original ID:', msgWithDirectProfile.reply_to_message_id);
+                const { data: repliedToMsgData, error: repliedToErr } = await supabase
+                  .from('messages')
+                  .select(`
+                    id, 
+                    content,
+                    user_id,
+                    media_url,
+                    media_type,
+                    is_read,
+                    profiles!inner(id, username, avatar_url)
+                  `)
+                  .eq('id', msgWithDirectProfile.reply_to_message_id)
+                  .single();
+
+                if (repliedToErr || !repliedToMsgData) {
+                  console.error('[REALTIME_MESSAGE] Error fetching replied-to message or message not found for ID:', msgWithDirectProfile.reply_to_message_id, repliedToErr);
+                } else {
+                  console.log('[REALTIME_MESSAGE] Fetched repliedToMsgData:', repliedToMsgData);
+                  fullMessageToInsert.reply_to = {
+                    content: repliedToMsgData.content,
+                    user_id: repliedToMsgData.user_id,
+                    media_url: repliedToMsgData.media_url,
+                    media_type: repliedToMsgData.media_type as 'image' | 'video' | 'gif' | undefined, 
+                    is_read: repliedToMsgData.is_read,
+                    profiles: repliedToMsgData.profiles ? {
+                        // id: (repliedToMsgData.profiles as any).id, // Not needed in Message.reply_to.profiles type
+                        username: (repliedToMsgData.profiles as any).username,
+                        avatar_url: (repliedToMsgData.profiles as any).avatar_url
+                    } : undefined
+                  };
+                }
+              }
+              
               setMessages(prevMessages => {
                 if (prevMessages.some(m => m.id === fullMessageToInsert.id)) {
-                  console.log('[REALTIME_MESSAGE] RT: Message ID', fullMessageToInsert.id, 'already exists in state (likely from optimistic update). Skipping addition.');
-                  // Optionally, replace if server version is more complete, but ensure no infinite loops
-                  // For now, just skip if ID exists, assuming optimistic update handled it or will be reconciled.
-                  return prevMessages.map(m => m.id === fullMessageToInsert.id ? fullMessageToInsert : m); // Update if exists to get server truth
+                  console.log('[REALTIME_MESSAGE] RT: Message ID', fullMessageToInsert.id, 'already exists. Updating it.');
+                  return prevMessages.map(m => m.id === fullMessageToInsert.id ? fullMessageToInsert : m).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
                 }
                 console.log('[REALTIME_MESSAGE] RT: Adding new message ID', fullMessageToInsert.id, 'to state.');
                 return [...prevMessages, fullMessageToInsert].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
