@@ -41,7 +41,7 @@ function UnreadBanner() {
       className="w-full py-2 px-4 my-2 bg-blue-50 border-l-4 border-blue-500 rounded-r-md"
       data-testid="unread-banner"
     >
-      <p className="text-blue-700 font-medium text-sm">New messages above</p>
+      <p className="text-blue-700 font-medium text-sm">New messages</p>
     </div>
   );
 }
@@ -3489,8 +3489,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           setFirstUnreadId(firstUnread.id);
         }
         
-        // Set the banner position to the last unread message
-        setFirstUnreadMessageIdForBanner(lastUnread.id);
+        // Set the banner position to the first unread message (oldest) instead of the last (newest)
+        setFirstUnreadMessageIdForBanner(firstUnread.id);
       }
     }
   }, [loading, messages, firstUnreadMessageIdForBanner, unreadCount, firstUnreadId, user?.id]);
@@ -3619,8 +3619,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         
         // Set the banner position if it's not already set
         if (!firstUnreadMessageIdForBanner) {
-          console.log('[UNREAD_CHECK] Setting banner position:', unreadMessages[unreadMessages.length - 1].id);
-          setFirstUnreadMessageIdForBanner(unreadMessages[unreadMessages.length - 1].id);
+          console.log('[UNREAD_CHECK] Setting banner position:', unreadMessages[0].id);
+          setFirstUnreadMessageIdForBanner(unreadMessages[0].id);
         }
       }
     }
@@ -3727,7 +3727,9 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                    setFirstUnreadId(firstUnreadIdRef.current);
                 }
                 if (!firstUnreadMessageIdForBanner) {
-                  setFirstUnreadMessageIdForBanner(newMessagePayload.id);
+                  // When new messages arrive, we want to set the banner to the first unread message
+                  // which will be the current firstUnreadIdRef if it exists, or the new message
+                  setFirstUnreadMessageIdForBanner(firstUnreadIdRef.current || newMessagePayload.id);
                 }
               }
             })();
