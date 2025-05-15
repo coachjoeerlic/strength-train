@@ -3590,8 +3590,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             
             if (messages.some(m => m.id === newMessagePayload.id)) {
                console.log('[REALTIME_MESSAGE] Message already exists, skipping.');
-               return;
-            }
+            return;
+          }
           
             // Get the new message with complete reply information
             const { data: messageData, error: messageError } = await supabase
@@ -3637,8 +3637,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             
             if (profileIds.size > 0) {
               const { data: profilesData, error: profilesError } = await supabase
-                .from('profiles')
-                .select('id, username, avatar_url')
+              .from('profiles')
+              .select('id, username, avatar_url')
                 .in('id', Array.from(profileIds));
                 
               if (profilesError) {
@@ -3667,11 +3667,11 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               }
             }
 
-            setMessages(prevMessages => {
+          setMessages(prevMessages => {
               const newMessagesArray = [...prevMessages, messageToInsert]
                 .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-              return newMessagesArray;
-            });
+            return newMessagesArray;
+          });
 
             // Continue with the existing unread count logic for messages from others
             if (newMessagePayload.user_id !== user?.id) {
@@ -3682,7 +3682,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
               setUnreadCount(unreadCountRef.current);
               if (!firstUnreadId) {
                  setFirstUnreadId(firstUnreadIdRef.current);
-              }
+        }
               if (!firstUnreadMessageIdForBanner) {
                 setFirstUnreadMessageIdForBanner(newMessagePayload.id);
               }
