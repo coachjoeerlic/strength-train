@@ -3927,24 +3927,31 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
                 let summaryIndex = currentReactions.findIndex(r => r.emoji === emoji);
 
                 if (isInsert) {
-                  if (reactionSummary) {
+                  // reactionUserId, emoji are confirmed to be strings here due to the earlier check
+                  if (reactionSummary && reactionSummary.userIds) { // Check if userIds array exists
                     // Emoji summary exists, update it
-                    if (!reactionSummary.userIds.includes(reactionUserId)) {
-                      reactionSummary.userIds.push(reactionUserId);
+                    if (!reactionSummary.userIds.includes(reactionUserId as string)) {
+                      reactionSummary.userIds.push(reactionUserId as string);
                       reactionSummary.count += 1;
                       if (reactionUserId === user?.id) {
                         reactionSummary.reactedByCurrentUser = true;
                       }
                     }
+                  } else if (reactionSummary && !reactionSummary.userIds) {
+                    // Edge case: summary exists but no userIds array (should not happen with proper init)
+                    reactionSummary.userIds = [reactionUserId as string];
+                    reactionSummary.count = 1;
+                    if (reactionUserId === user?.id) {
+                      reactionSummary.reactedByCurrentUser = true;
+                    }
                   } else {
-                    // New emoji summary
-                    reactionSummary = {
-                      emoji: emoji,
+                    // New emoji summary, reactionUserId and emoji are confirmed strings
+                    currentReactions.push({
+                      emoji: emoji as string, // Cast for safety, though earlier check should suffice
                       count: 1,
                       reactedByCurrentUser: reactionUserId === user?.id,
-                      userIds: [reactionUserId],
-                    };
-                    currentReactions.push(reactionSummary);
+                      userIds: [reactionUserId as string],
+                    });
                   }
                 } else if (isDelete) {
                   if (reactionSummary) {
