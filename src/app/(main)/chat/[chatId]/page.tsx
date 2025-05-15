@@ -3826,83 +3826,149 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen to all changes (INSERT, UPDATE, DELETE)
+          event: '*', // Listen to INSERT, UPDATE, DELETE
           schema: 'public',
           table: 'reactions',
-          filter: `chat_id=eq.${params.chatId}` // Assuming reactions table has chat_id
+          filter: `chat_id=eq.${params.chatId}`, // Assuming reactions table has chat_id
         },
-        async (payload: { eventType: 'INSERT' | 'UPDATE' | 'DELETE'; new: any; old: any; table: string; schema: string; commit_timestamp: string; errors: any[] | null }) => {
-          console.log('[REALTIME_REACTION] Reaction payload received:', payload);
+        async (payload) => {
+          console.log('[REALTIME_REACTION] Payload received:', payload);
 
-          let affectedMessageId: string | undefined;
-          let record = payload.new; // For INSERT, UPDATE
+          const { eventType, new: newRecord, old: oldRecord, table } = payload;
+          if (table !== 'reactions') return;
 
-          if (payload.eventType === 'DELETE') {
-            record = payload.old;
+          let messageId: string | undefined;
+          let reactionUserId: string | undefined;
+          let emoji: string | undefined;
+          let isInsert = false;
+          let isDelete = false;
+
+          if (eventType === 'INSERT' && newRecord) {
+            messageId = newRecord.message_id;
+            reactionUserId = newRecord.user_id;
+            emoji = newRecord.emoji;
+            isInsert = true;
+            console.log('[REALTIME_REACTION] INSERT detected:', { messageId, reactionUserId, emoji });
+          } else if (eventType === 'DELETE' && oldRecord) {
+            messageId = oldRecord.message_id;
+            reactionUserId = oldRecord.user_id;
+            emoji = oldRecord.emoji;
+            isDelete = true;
+            console.log('[REALTIME_REACTION] DELETE detected:', { messageId, reactionUserId, emoji });
+          } else if (eventType === 'UPDATE' && newRecord && oldRecord) {
+            // Handle updates if necessary, e.g. if an emoji could be changed
+            // For now, we can treat it like a delete of old and insert of new if they differ significantly
+            // or just re-fetch/re-process the specific message's reactions.
+            // Simpler: focus on insert/delete as primary RT events for reactions.
+             console.log('[REALTIME_REACTION] UPDATE detected (not fully handled, inspect if needed):', { newRecord, oldRecord });
+             // Potentially, re-fetch all reactions for the message for simplicity on UPDATE
+             // For now, this example will primarily focus on INSERT and DELETE
+             messageId = newRecord.message_id || oldRecord.message_id;
+             // To handle UPDATE robustly, one might need to re-fetch all reactions for the messageId
+             // or implement more complex diffing. Let's try re-fetching.
+             if (messageId) {
+                const { data: updatedMessageReactions, error: fetchError } = await supabase
+                    .from('reactions')
+                    .select('user_id, emoji')
+                    .eq('message_id', messageId);
+
+                if (fetchError) {
+                    console.error('[REALTIME_REACTION] UPDATE: Error fetching reactions for message:', messageId, fetchError);
+                    return;
+                }
+                
+                setMessages(prevMessages =>
+                  prevMessages.map(msg => {
+                    if (msg.id === messageId) {
+                      const newReactionSummaries: ReactionSummary[] = [];
+                      const reactionsByEmoji = (updatedMessageReactions || []).reduce((acc, reaction) => {
+                        acc[reaction.emoji] = acc[reaction.emoji] || { userIds: [], count: 0 };
+                        acc[reaction.emoji].userIds.push(reaction.user_id);
+                        acc[reaction.emoji].count++;
+                        return acc;
+                      }, {} as Record<string, { userIds: string[]; count: number }>);
+
+                      for (const emojiKey in reactionsByEmoji) {
+                        const { userIds: reactingUserIds, count } = reactionsByEmoji[emojiKey];
+                        newReactionSummaries.push({
+                          emoji: emojiKey,
+                          count: count,
+                          reactedByCurrentUser: user?.id ? reactingUserIds.includes(user.id) : false,
+                          userIds: reactingUserIds,
+                        });
+                      }
+                      newReactionSummaries.sort((a, b) => {
+                        if (b.count !== a.count) return b.count - a.count;
+                        return a.emoji.localeCompare(b.emoji);
+                      });
+                      console.log('[REALTIME_REACTION] UPDATE: Updating reactions for message', messageId, newReactionSummaries);
+                      return { ...msg, reactions: newReactionSummaries };
+                    }
+                    return msg;
+                  })
+                );
+             }
+             return; // Early return after handling UPDATE with re-fetch
+          } else {
+            return; // Not an event type we're handling for reactions
           }
 
-          affectedMessageId = record?.message_id;
-
-          if (!affectedMessageId) {
-            console.error('[REALTIME_REACTION] No message_id in reaction payload', payload);
+          if (!messageId || !reactionUserId || !emoji) {
+            console.warn('[REALTIME_REACTION] Insufficient data in payload:', payload);
             return;
           }
 
-          // Check if the message is part of the current view. 
-          // Accessing 'messages' directly here creates a stale closure if not handled carefully.
-          // Using setMessages functional update form is better.
-          let messageIsRelevant = false;
-          setMessages(prevMessages => {
-            messageIsRelevant = prevMessages.some(m => m.id === affectedMessageId);
-            return prevMessages; // No actual state change here, just checking relevance
-          });
+          setMessages(prevMessages =>
+            prevMessages.map(msg => {
+              if (msg.id === messageId) {
+                const currentReactions = msg.reactions ? [...msg.reactions] : [];
+                let reactionSummary = currentReactions.find(r => r.emoji === emoji);
+                let summaryIndex = currentReactions.findIndex(r => r.emoji === emoji);
 
-          if (!messageIsRelevant) {
-            console.log('[REALTIME_REACTION] Reaction for message_id', affectedMessageId, 'not in current view. Skipping UI update.');
-            return;
-          }
-
-          try {
-            // Fetch all current reactions for the specific message_id
-            const { data: currentReactionsForMessage, error: fetchError } = await supabase
-              .from('reactions')
-              .select('message_id, user_id, emoji') // Ensure these match what processAndStitchReactions expects
-              .eq('message_id', affectedMessageId);
-
-            if (fetchError) {
-              console.error('[REALTIME_REACTION] Error fetching reactions for message:', affectedMessageId, fetchError);
-              return;
-            }
-            
-            console.log('[REALTIME_REACTION] Fetched current reactions for message', affectedMessageId, ':', currentReactionsForMessage);
-
-            setMessages(prevMessages => {
-              const messageIndex = prevMessages.findIndex(m => m.id === affectedMessageId);
-              if (messageIndex === -1) {
-                // Message might have been removed from state by another process
-                console.warn('[REALTIME_REACTION] Affected message_id', affectedMessageId, 'not found in prevMessages during update.');
-                return prevMessages; 
+                if (isInsert) {
+                  if (reactionSummary) {
+                    // Emoji summary exists, update it
+                    if (!reactionSummary.userIds.includes(reactionUserId)) {
+                      reactionSummary.userIds.push(reactionUserId);
+                      reactionSummary.count += 1;
+                      if (reactionUserId === user?.id) {
+                        reactionSummary.reactedByCurrentUser = true;
+                      }
+                    }
+                  } else {
+                    // New emoji summary
+                    reactionSummary = {
+                      emoji: emoji,
+                      count: 1,
+                      reactedByCurrentUser: reactionUserId === user?.id,
+                      userIds: [reactionUserId],
+                    };
+                    currentReactions.push(reactionSummary);
+                  }
+                } else if (isDelete) {
+                  if (reactionSummary) {
+                    reactionSummary.userIds = reactionSummary.userIds.filter(uid => uid !== reactionUserId);
+                    reactionSummary.count -= 1;
+                    if (reactionUserId === user?.id) {
+                      reactionSummary.reactedByCurrentUser = false;
+                    }
+                    if (reactionSummary.count <= 0 && summaryIndex !== -1) {
+                      currentReactions.splice(summaryIndex, 1); // Remove summary if count is 0
+                    }
+                  }
+                }
+                
+                // Sort reactions for consistent display
+                currentReactions.sort((a, b) => {
+                  if (b.count !== a.count) return b.count - a.count;
+                  return a.emoji.localeCompare(b.emoji);
+                });
+                console.log('[REALTIME_REACTION] Updating message:', messageId, 'with new reactions:', currentReactions);
+                return { ...msg, reactions: currentReactions };
               }
-
-              const affectedMessage = prevMessages[messageIndex];
-              
-              // Use the existing utility to process and stitch reactions onto this single message
-              const [updatedMessageWithReactions] = processAndStitchReactions(
-                [affectedMessage], // processAndStitchReactions expects an array of messages
-                currentReactionsForMessage || [], // Pass an empty array if no reactions are found (e.g., all deleted)
-                user?.id // currentUserId for determining reactedByCurrentUser
-              );
-
-              const newMessages = [...prevMessages];
-              newMessages[messageIndex] = updatedMessageWithReactions;
-              
-              console.log('[REALTIME_REACTION] Updating message in state with new reactions. Message ID:', affectedMessageId, 'New Reactions:', updatedMessageWithReactions.reactions);
-              return newMessages;
-            });
-
-          } catch (error) {
-            console.error('[REALTIME_REACTION] Error processing reaction update for message_id', affectedMessageId, error);
-          }
+              return msg;
+            })
+          );
         }
       )
       .subscribe((status, err) => {
