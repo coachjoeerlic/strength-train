@@ -3570,22 +3570,29 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         const newAnchorEl = document.getElementById(`message-${anchorId}`); 
         
         if (newAnchorEl && container) { 
+          // Force reflow/recalc before reading dimensions
+          container.scrollTop; // Reading scrollTop can sometimes help, or offsetHeight
+          newAnchorEl.offsetHeight; // Reading a dimension property forces layout calculation
+
           const containerRectTop = container.getBoundingClientRect().top;
           const newAnchorElRectTop = newAnchorEl.getBoundingClientRect().top;
           
           const currentVisualOffset = newAnchorElRectTop - containerRectTop;
           const scrollAdjustment = currentVisualOffset - anchorOffsetTop; 
-          const newScrollTop = container.scrollTop + scrollAdjustment;
+          const previousScrollTop = container.scrollTop; // Capture before changing
+          const newScrollTop = previousScrollTop + scrollAdjustment;
 
           console.log('[ANCHOR_LAYOUT_EFFECT] Restoring scroll:', {
             anchorId, 
-            currentScrollTop: container.scrollTop,
+            currentScrollTop: previousScrollTop,
             targetScrollTop: newScrollTop,
-            anchorOffsetTop, 
+            calculatedScrollAdjustment: scrollAdjustment,
+            anchorOffsetTop, // Desired visual offset (captured before load)
+            currentVisualOffset, // Actual visual offset (after load, before scroll correction)
             newAnchorElRectTop, 
             containerRectTop,   
-            currentVisualOffset, 
-            scrollAdjustment,    
+            containerScrollHeight: container.scrollHeight,
+            containerClientHeight: container.clientHeight
           });
 
           if (Math.abs(scrollAdjustment) > 1) { 
@@ -3603,12 +3610,14 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           console.log('[ANCHOR_LAYOUT_EFFECT] No anchorId found for adjustment. Resetting loading flags.', { capturedAnchorIdFromRef });
           anchorScrollInfoRef.current = { id: null, offset: 0 };
           isLoadingMoreRef.current = false;
-          fetchState.current = 'idle'; // Ensure state is reset even if no anchor was found but adjustment was requested
+          fetchState.current = 'idle';
       }
-    } 
-    // The problematic `else if` block that was here has been removed.
-  }, [messages]); // Dependency on messages is crucial.
+    } else if (!needsScrollAdjustmentRef.current && fetchState.current === 'updating' && !isLoadingMoreRef.current) {
+      console.log('[ANCHOR_LAYOUT_EFFECT] State check: needsAdjustment=false, fetchState=updating, isLoadingMore=false. Ensuring idle.', { fetchState_before: fetchState.current });
+    }
+  }, [messages]); 
 
+  // useEffect
   useEffect(() => {
     addThrobAnimation();
 
