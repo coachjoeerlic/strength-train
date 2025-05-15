@@ -4069,6 +4069,21 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     }
   };
 
+  // At the top of ChatPage component
+  const messageInputRef = useRef<HTMLInputElement>(null); // Assuming MessageInput exposes a ref or its input field does
+
+  // 1. Body Scroll Lock
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    console.log('[SCROLL_LOCK] Body overflow hidden');
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      console.log('[SCROLL_LOCK] Body overflow restored to:', originalOverflow);
+    };
+  }, []); // Empty dependency array, runs on mount and unmount
+
   if (loading) { // This `loading` state is for initial message fetch
     return (
       <div className="h-screen flex flex-col">
@@ -4086,7 +4101,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   }
 
   return (
-    <main className="h-screen flex flex-col relative"> {/* Added relative positioning for toast container */}
+    <main className="h-screen flex flex-col relative bg-gray-50 dark:bg-gray-900"> {/* Added relative positioning for toast container */}
       {/* SuperemojiMenu - Rendered at top level */}
       {superemojiMenuState.isVisible && superemojiMenuState.message && superemojiMenuState.position && (
         <SuperemojiMenu
@@ -4150,7 +4165,24 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       )}
       
       {/* Message container */}
-      <div ref={handleScrollContainerRef} className="flex-1 overflow-y-auto">
+      <div 
+        ref={handleScrollContainerRef} 
+        className="flex-1 overflow-y-auto pwa-chat-scroll-container" // Added a specific class for clarity/targeting
+        style={{ WebkitOverflowScrolling: 'touch' }} // For smoother scrolling on iOS Safari (PWA context)
+        onClick={(e) => {
+          // If the click target is the scroll container itself (not a child like a button or link)
+          // and the message input exists, try to focus the input.
+          // This helps if the user taps the background of the message list.
+          if (e.target === scrollContainerRef.current && messageInputRef.current) {
+            // Check if MessageInput component can expose its internal input ref, or use a known selector
+            const inputElement = messageInputRef.current.querySelector('input[type="text"]') as HTMLInputElement | null;
+            if (inputElement && document.activeElement !== inputElement) {
+                // console.log('[FOCUS_HANDLER] Tapped on scroll container, focusing input.');
+                // inputElement.focus(); // Focusing can sometimes cause unwanted scroll jumps, use with caution
+            }
+          }
+        }}
+      >
         <div className="max-w-2xl mx-auto space-y-4 px-4 pb-2 pt-2">
           {(() => {
             // Track the current message date to detect date changes
@@ -4227,7 +4259,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       </div>
       
       {/* Message input area */}
-      <div className="flex-shrink-0 border-t bg-white pb-[50px]">
+      <div className="flex-shrink-0 border-t bg-white dark:bg-gray-800 pb-[50px]">
         <div className="max-w-2xl mx-auto px-4 py-2">
           {replyingTo && (
             <div className="p-2 bg-gray-100 rounded-lg flex justify-between items-center mb-2">
@@ -4283,7 +4315,11 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           )}
           {/* Add typing indicator component */}
           <TypingIndicator chatId={params.chatId} currentUser={user} />
-          <MessageInput onSend={sendMessage} chatId={params.chatId} />
+          <MessageInput 
+            ref={messageInputRef} // Pass the ref to MessageInput
+            onSend={sendMessage} 
+            chatId={params.chatId} 
+          />
         </div>
       </div>
       

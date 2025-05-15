@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent, useRef, useEffect } from 'react';
+import React, { useState, FormEvent, useRef, useEffect, forwardRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { setTypingStatus, removeTypingStatus, cleanupTyping } from '@/lib/typingService';
 import { useAuth } from '@/lib/AuthContext';
@@ -20,7 +20,7 @@ interface GifResult {
   };
 }
 
-export default function MessageInput({ onSend, chatId }: MessageInputProps) {
+const MessageInput = forwardRef<HTMLInputElement, MessageInputProps>(({ onSend, chatId }, ref) => {
   const { user } = useAuth();
   const [message, setMessage] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -198,8 +198,6 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
     
     if (isSendDisabled) {
       showToast("Please wait a moment before sending another message.", 'info', 2000);
-      // It might be better to also close the GIF search panel here if the send is blocked
-      // setIsGifSearchOpen(false); // Optional: close panel if rate limited
       return;
     }
     
@@ -264,8 +262,9 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
         >
           GIF
         </button>
-      <input
-        type="text"
+        <input
+          type="text"
+          ref={ref}
           value={message}
           onChange={handleMessageChange}
           onBlur={() => {
@@ -273,7 +272,7 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
               removeTypingStatus(user.id, chatId);
             }
           }}
-        placeholder="Type a message..."
+          placeholder="Type a message..."
           className="flex-1 min-w-0 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={isUploading}
         />
@@ -291,8 +290,12 @@ export default function MessageInput({ onSend, chatId }: MessageInputProps) {
           accept="image/*,video/mp4,video/webm"
           className="hidden"
           disabled={isUploading}
-      />
-    </div>
+        />
+      </div>
     </form>
   );
-} 
+});
+
+MessageInput.displayName = 'MessageInput';
+
+export default MessageInput; 
