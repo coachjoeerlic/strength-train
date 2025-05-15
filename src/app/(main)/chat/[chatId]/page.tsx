@@ -3556,65 +3556,69 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     }
   }, [user, firstUnreadId, params.chatId]);
 
-  // Add useEffect for scroll adjustment after upward pagination
-  useEffect(() => {
-    // Check if adjustment is needed (set by fetchMoreMessages)
+  // Change useEffect to useLayoutEffect for scroll adjustment after upward pagination
+  // This runs synchronously after DOM mutations but before paint, to avoid flicker.
+  useLayoutEffect(() => {
     if (needsScrollAdjustmentRef.current && scrollContainerRef.current) {
-      const { id: capturedAnchorIdFromRef, offset: capturedAnchorOffsetTopFromRef } = anchorScrollInfoRef.current; // Destructure consistently at the start
+      const { id: capturedAnchorIdFromRef, offset: capturedAnchorOffsetTopFromRef } = anchorScrollInfoRef.current;
       const container = scrollContainerRef.current;
       
-      // Reset the flag immediately to indicate adjustment is being handled for this specific update
       needsScrollAdjustmentRef.current = false; 
 
       if (capturedAnchorIdFromRef) {
-        // Wait for next frame to ensure DOM is updated after messages render
-        requestAnimationFrame(() => {
-          const { id: anchorId, offset: anchorOffsetTop } = anchorScrollInfoRef.current; // Read fresh values from ref for this frame
-          const newAnchorEl = document.getElementById(`message-${anchorId}`); 
+        // No requestAnimationFrame needed here, useLayoutEffect is synchronous pre-paint.
+        const { id: anchorId, offset: anchorOffsetTop } = anchorScrollInfoRef.current; 
+        const newAnchorEl = document.getElementById(`message-${anchorId}`); 
+        
+        if (newAnchorEl && container) { 
+          const containerRectTop = container.getBoundingClientRect().top;
+          const newAnchorElRectTop = newAnchorEl.getBoundingClientRect().top;
           
-          if (newAnchorEl && container) { 
-            const containerRectTop = container.getBoundingClientRect().top;
-            const newAnchorElRectTop = newAnchorEl.getBoundingClientRect().top;
-            
-            const currentVisualOffset = newAnchorElRectTop - containerRectTop;
-            const scrollAdjustment = currentVisualOffset - anchorOffsetTop; 
-            const newScrollTop = container.scrollTop + scrollAdjustment;
+          const currentVisualOffset = newAnchorElRectTop - containerRectTop;
+          const scrollAdjustment = currentVisualOffset - anchorOffsetTop; 
+          const newScrollTop = container.scrollTop + scrollAdjustment;
 
-            console.log('[ANCHOR_EFFECT] Restoring scroll:', {
-              anchorId, 
-              currentScrollTop: container.scrollTop,
-              targetScrollTop: newScrollTop,
-              anchorOffsetTop, // Desired visual offset from container top (captured before new messages)
-              newAnchorElRectTop, // Current visual top of anchor (relative to viewport)
-              containerRectTop,   // Current visual top of container (relative to viewport)
-              currentVisualOffset, // Current visual offset of anchor from container's top
-              scrollAdjustment,    // How much scrollTop needs to change
-            });
+          console.log('[ANCHOR_LAYOUT_EFFECT] Restoring scroll:', {
+            anchorId, 
+            currentScrollTop: container.scrollTop,
+            targetScrollTop: newScrollTop,
+            anchorOffsetTop, 
+            newAnchorElRectTop, 
+            containerRectTop,   
+            currentVisualOffset, 
+            scrollAdjustment,    
+          });
 
-            if (Math.abs(scrollAdjustment) > 1) { 
-                container.scrollTop = newScrollTop;
-            }
-          } else {
-             console.warn('[ANCHOR_EFFECT] Anchor element or container not found for restoration:', anchorId);
+          if (Math.abs(scrollAdjustment) > 1) { 
+              container.scrollTop = newScrollTop;
           }
-          anchorScrollInfoRef.current = { id: null, offset: 0 }; 
+        } else {
+           console.warn('[ANCHOR_LAYOUT_EFFECT] Anchor element or container not found for restoration:', anchorId);
+        }
+        
+        anchorScrollInfoRef.current = { id: null, offset: 0 }; 
+        isLoadingMoreRef.current = false;
+        fetchState.current = 'idle';
+        console.log('[ANCHOR_LAYOUT_EFFECT] Scroll adjustment finished, loading flags reset.');
+      } else {
+          console.log('[ANCHOR_LAYOUT_EFFECT] No anchorId found for adjustment. Resetting loading flags.', { capturedAnchorIdFromRef });
+          anchorScrollInfoRef.current = { id: null, offset: 0 };
           isLoadingMoreRef.current = false;
           fetchState.current = 'idle';
-          console.log('[ANCHOR_EFFECT] Scroll adjustment finished, loading flags reset.');
-        });
-      } else {
-          console.log('[ANCHOR_EFFECT] No anchorId found for adjustment (capturedId was null). Resetting loading flags.', { capturedAnchorIdFromRef });
-          // Clear anchor info and reset loading state even if no ID was found
-           anchorScrollInfoRef.current = { id: null, offset: 0 };
-           isLoadingMoreRef.current = false;
-           fetchState.current = 'idle';
       }
     } else if (!needsScrollAdjustmentRef.current && fetchState.current === 'updating' && !isLoadingMoreRef.current) {
-      // This else-if block might still need scrutiny but is not the primary focus of this fix.
-      // fetchState.current = 'idle';
-      // console.log('[ANCHOR_EFFECT] No scroll adjustment needed (needsScrollAdjustmentRef was false), ensuring state is idle if it was updating.');
+      // This handles cases where a fetch completed (e.g., fetchNewerMessages or an older fetch that added no messages or found no anchor)
+      // and set fetchState to 'updating', but didn't queue a scroll adjustment. We need to reset to idle.
+      // However, this should ideally be handled more directly by those functions or a more robust state machine.
+      // For now, let's ensure that if a fetch set `isLoadingMoreRef.current = true` and `fetchState = 'fetching'`, 
+      // and it transitions to `fetchState = 'updating'` but doesn't trigger scroll adjustment, it still gets reset.
+      // The current logic for `isLoadingMoreRef` might already cover this if it's always reset with fetchState.
+      // The primary path for fetchMoreMessages now resets these in the `if (capturedAnchorIdFromRef)` block.
+      // Let's log if this path is hit to see if it's necessary or if other paths correctly reset state.
+      console.log('[ANCHOR_LAYOUT_EFFECT] State check: needsAdjustment=false, fetchState=updating, isLoadingMore=false. Ensuring idle.', { fetchState_before: fetchState.current });
+      // fetchState.current = 'idle'; // Potentially redundant if isLoadingMoreRef and fetchState are paired.
     }
-  }, [messages]); // Run this effect whenever messages array changes
+  }, [messages]); // Dependency on messages is crucial.
 
   // useEffect
   useEffect(() => {
