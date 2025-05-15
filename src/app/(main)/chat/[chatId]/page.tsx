@@ -315,7 +315,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
 
   // Local toast state, ref, and helper function have been removed.
 
-  const fetchLatestPinnedMessage = async () => {
+  const fetchLatestPinnedMessage = useCallback(async () => {
     if (!params.chatId || !supabase) return; 
     try {
       console.log('[PINNED_BANNER] Fetching latest pinned message for chat:', params.chatId);
@@ -375,7 +375,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       showToast('Error loading pinned message.', 'error');
       setLatestPinnedMessage(null);
     }
-  };
+  }, [params.chatId, supabase, showToast, setLatestPinnedMessage]);
 
   const handlePinMessage = async (messageId: string) => {
     console.log('[PINNING] Pinning message:', messageId);
@@ -4024,7 +4024,15 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       if (adminActionChannel) supabase.removeChannel(adminActionChannel).catch(err => console.error('Error removing adminActionChannel:', err));
       // channelRef.current = null;
     };
-  }, [user, params.chatId, supabase, processAndStitchReactions, messages, currentUserProfile, fetchLatestPinnedMessage, firstUnreadId, firstUnreadMessageIdForBanner]); // Added dependencies
+  }, [
+    user, 
+    params.chatId, 
+    supabase, 
+    processAndStitchReactions, // Memoized
+    currentUserProfile, // Assumed to be relatively stable or requiring re-sub on change
+    fetchLatestPinnedMessage // Now memoized
+    // Removed: messages, firstUnreadId, firstUnreadMessageIdForBanner
+  ]);
 
   const handleOpenSuperemojiMenu = async (message: Message, position: { x: number; y: number }) => {
     let profilesForMenu: Array<{ id: string; username?: string; avatar_url?: string; emoji: string }> = [];
