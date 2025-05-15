@@ -1015,41 +1015,49 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     // --- Anchor Scroll: Capture Info --- 
     let capturedAnchorId: string | null = null;
     let capturedAnchorOffsetTop: number = 0;
-      const container = scrollContainerRef.current;
+    const container = scrollContainerRef.current;
 
     if (container) {
-      const messageElements = container.querySelectorAll('[data-message-id]');
-      const containerRect = container.getBoundingClientRect();
-      for (let i = 0; i < messageElements.length; i++) {
-        const el = messageElements[i] as HTMLElement;
+      const messageElements = Array.from(container.querySelectorAll('[data-message-id]')) as HTMLElement[];
+      const containerRectTop = container.getBoundingClientRect().top;
+
+      for (const el of messageElements) {
         const elRect = el.getBoundingClientRect();
-        // Find first element whose top is within/above viewport top and bottom is below viewport top
-        if (elRect.top <= containerRect.top && elRect.bottom > containerRect.top) {
+        // Anchor to the first element that is at least partially visible and starts at or below the container's top edge.
+        // elRect.top >= containerRectTop means its top is not above the container's visible top.
+        // elRect.bottom > containerRectTop means its bottom is below the container's visible top (i.e., at least part of it is visible).
+        if (elRect.top >= containerRectTop && elRect.bottom > containerRectTop) {
           capturedAnchorId = el.getAttribute('data-message-id');
-          // Ensure offset is relative to container, not viewport, if needed. Here using diff from container top.
-          capturedAnchorOffsetTop = elRect.top - containerRect.top; 
-          console.log('[FETCH_MORE_ANCHOR] Captured anchor:', { capturedAnchorId, capturedAnchorOffsetTop });
+          capturedAnchorOffsetTop = elRect.top - containerRectTop; // Visual offset from container's top edge
+          console.log('[FETCH_MORE_ANCHOR] Captured anchor (first visible at/below top):', { capturedAnchorId, capturedAnchorOffsetTop, elTop: elRect.top, containerTop: containerRectTop });
           break;
         }
       }
-      // Fallback if nothing is crossing the top boundary
+
+      // Fallback: If no element met the strict criteria (e.g., all elements are slightly scrolled up but top one is still largely visible),
+      // find the first element whose bottom edge is below the container's top edge.
       if (!capturedAnchorId && messageElements.length > 0) {
-          const firstEl = messageElements[0] as HTMLElement;
-           capturedAnchorId = firstEl.getAttribute('data-message-id');
-           capturedAnchorOffsetTop = firstEl.getBoundingClientRect().top - containerRect.top;
-           console.log('[FETCH_MORE_ANCHOR] Using fallback anchor (first element):', { capturedAnchorId, capturedAnchorOffsetTop });
+        for (const el of messageElements) {
+          const elRect = el.getBoundingClientRect();
+          if (elRect.bottom > containerRectTop) { // Is any part of this element visible from the top?
+            capturedAnchorId = el.getAttribute('data-message-id');
+            capturedAnchorOffsetTop = elRect.top - containerRectTop;
+            console.log('[FETCH_MORE_ANCHOR] Captured anchor (fallback - first partially visible from top):', { capturedAnchorId, capturedAnchorOffsetTop, elTop: elRect.top, elBottom: elRect.bottom, containerTop: containerRectTop });
+            break;
+          }
+        }
       }
 
-      // Store captured info in refs immediately
       anchorScrollInfoRef.current = { id: capturedAnchorId, offset: capturedAnchorOffsetTop };
-      // Signal that adjustment is needed *after* the upcoming state update
-      if (capturedAnchorId) { // Only signal if we actually found an anchor
-           needsScrollAdjustmentRef.current = true; 
+      if (capturedAnchorId) {
+        needsScrollAdjustmentRef.current = true;
       } else {
-           needsScrollAdjustmentRef.current = false; // Ensure it's false if no anchor found
+        needsScrollAdjustmentRef.current = false;
+        // If no anchor, ensure loading flags are reset by the effect if it was triggered.
+        // This will be handled by the useEffect that checks needsScrollAdjustmentRef.
       }
     } else {
-         needsScrollAdjustmentRef.current = false; // Ensure it's false if no container
+      needsScrollAdjustmentRef.current = false;
     }
     // --- End Anchor Scroll Capture --- 
 
@@ -3552,50 +3560,59 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   useEffect(() => {
     // Check if adjustment is needed (set by fetchMoreMessages)
     if (needsScrollAdjustmentRef.current && scrollContainerRef.current) {
-      const { id: anchorId, offset: anchorOffsetTop } = anchorScrollInfoRef.current;
+      const { id: capturedAnchorIdFromRef, offset: capturedAnchorOffsetTopFromRef } = anchorScrollInfoRef.current; // Destructure consistently at the start
       const container = scrollContainerRef.current;
       
       // Reset the flag immediately to indicate adjustment is being handled for this specific update
       needsScrollAdjustmentRef.current = false; 
 
-      if (anchorId) {
+      if (capturedAnchorIdFromRef) {
         // Wait for next frame to ensure DOM is updated after messages render
         requestAnimationFrame(() => {
-          const newAnchorEl = document.getElementById(`message-${anchorId}`);
-          if (newAnchorEl && container) { // Re-check container ref just in case
-            const newAnchorOffsetFromScrollParent = newAnchorEl.offsetTop;
-            const targetScrollTop = newAnchorOffsetFromScrollParent - anchorOffsetTop;
-            console.log('[ANCHOR_EFFECT] Restoring scroll:', { anchorId, currentScrollTop: container.scrollTop, targetScrollTop, anchorOffsetTop, newAnchorOffsetFromScrollParent });
-            // Only adjust if the difference is significant to avoid minor jitter
-            if (Math.abs(container.scrollTop - targetScrollTop) > 1) { 
-                container.scrollTop = targetScrollTop;
+          const { id: anchorId, offset: anchorOffsetTop } = anchorScrollInfoRef.current; // Read fresh values from ref for this frame
+          const newAnchorEl = document.getElementById(`message-${anchorId}`); 
+          
+          if (newAnchorEl && container) { 
+            const containerRectTop = container.getBoundingClientRect().top;
+            const newAnchorElRectTop = newAnchorEl.getBoundingClientRect().top;
+            
+            const currentVisualOffset = newAnchorElRectTop - containerRectTop;
+            const scrollAdjustment = currentVisualOffset - anchorOffsetTop; 
+            const newScrollTop = container.scrollTop + scrollAdjustment;
+
+            console.log('[ANCHOR_EFFECT] Restoring scroll:', {
+              anchorId, 
+              currentScrollTop: container.scrollTop,
+              targetScrollTop: newScrollTop,
+              anchorOffsetTop, // Desired visual offset from container top (captured before new messages)
+              newAnchorElRectTop, // Current visual top of anchor (relative to viewport)
+              containerRectTop,   // Current visual top of container (relative to viewport)
+              currentVisualOffset, // Current visual offset of anchor from container's top
+              scrollAdjustment,    // How much scrollTop needs to change
+            });
+
+            if (Math.abs(scrollAdjustment) > 1) { 
+                container.scrollTop = newScrollTop;
             }
           } else {
-             console.warn('[ANCHOR_EFFECT] Anchor element or container not found:', anchorId);
+             console.warn('[ANCHOR_EFFECT] Anchor element or container not found for restoration:', anchorId);
           }
-          // Clear anchor info and reset loading state *after* attempting adjustment
           anchorScrollInfoRef.current = { id: null, offset: 0 }; 
           isLoadingMoreRef.current = false;
           fetchState.current = 'idle';
           console.log('[ANCHOR_EFFECT] Scroll adjustment finished, loading flags reset.');
         });
       } else {
-          console.log('[ANCHOR_EFFECT] No anchorId found for adjustment. Resetting loading flags.');
+          console.log('[ANCHOR_EFFECT] No anchorId found for adjustment (capturedId was null). Resetting loading flags.', { capturedAnchorIdFromRef });
           // Clear anchor info and reset loading state even if no ID was found
            anchorScrollInfoRef.current = { id: null, offset: 0 };
            isLoadingMoreRef.current = false;
            fetchState.current = 'idle';
       }
     } else if (!needsScrollAdjustmentRef.current && fetchState.current === 'updating' && !isLoadingMoreRef.current) {
-      // If no scroll adjustment was queued, but we were in 'updating' state from a fetch
-      // that didn't need scroll anchoring (e.g. fetchNewerMessages or an empty older fetch),
-      // ensure we return to idle.
-      // This case might need refinement depending on how fetchNewerMessages handles its state.
-      // For now, this specifically handles the case where fetchMoreMessages didn't set an anchor.
+      // This else-if block might still need scrutiny but is not the primary focus of this fix.
       // fetchState.current = 'idle';
-      // console.log('[ANCHOR_EFFECT] No scroll adjustment needed, ensuring state is idle.');
-      // The above might be too aggressive or not needed if fetchMoreMessages always resets state on error/no-anchor.
-      // The 'else if' condition where anchorId is null handles resetting flags if no anchor was found.
+      // console.log('[ANCHOR_EFFECT] No scroll adjustment needed (needsScrollAdjustmentRef was false), ensuring state is idle if it was updating.');
     }
   }, [messages]); // Run this effect whenever messages array changes
 
