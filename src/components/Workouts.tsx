@@ -14,6 +14,9 @@ interface WorkoutsProps {
 
 const COACH_USER_ID = '195b8756-25ad-4bba-a5d3-553f8049152d';
 const WATCHED_VIDEOS_KEY = 'watchedPerformanceVideos';
+const WORKOUTS_STATE_KEY_CATEGORY = 'workoutsSelectedCategoryId';
+const WORKOUTS_STATE_KEY_PROGRAM = 'workoutsSelectedProgramId';
+const WORKOUTS_STATE_KEY_EXERCISE = 'workoutsSelectedExerciseId';
 
 const categories: Category[] = [
   {
@@ -226,32 +229,128 @@ const sampleWorkoutProgram: WorkoutProgramType = {
 
 export function Workouts({ onNavigateToChat }: WorkoutsProps) {
   const { user } = useAuth();
-  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
-  const [selectedProgram, setSelectedProgram] = useState<Program | null>(null);
-  const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null);
-  const [watchedVideos, setWatchedVideos] = useState<Set<string>>(new Set([]));
   const [isLoadingChat, setIsLoadingChat] = useState(false);
-  
-  // Initialize watched videos from localStorage (client-side only)
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(WATCHED_VIDEOS_KEY);
-      if (saved) {
-        setWatchedVideos(new Set(JSON.parse(saved)));
+
+  // Initialize state from localStorage or defaults
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(() => {
+    if (typeof window !== 'undefined') {
+      const savedCategoryId = localStorage.getItem(WORKOUTS_STATE_KEY_CATEGORY);
+      if (savedCategoryId) {
+        return categories.find(c => c.id === savedCategoryId) || null;
       }
-    } catch (error) {
-      console.error('Error loading watched videos from localStorage:', error);
+    }
+    return null;
+  });
+
+  const [selectedProgram, setSelectedProgram] = useState<Program | null>(() => {
+    if (typeof window !== 'undefined') {
+      const savedProgramId = localStorage.getItem(WORKOUTS_STATE_KEY_PROGRAM);
+      const savedCategoryId = localStorage.getItem(WORKOUTS_STATE_KEY_CATEGORY);
+      if (savedProgramId && savedCategoryId && programs[savedCategoryId]) {
+        return programs[savedCategoryId].find(p => p.id === savedProgramId) || null;
+      }
+    }
+    return null;
+  });
+
+  const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(() => {
+    if (typeof window !== 'undefined') {
+      const savedExerciseId = localStorage.getItem(WORKOUTS_STATE_KEY_EXERCISE);
+      const savedCategoryId = localStorage.getItem(WORKOUTS_STATE_KEY_CATEGORY);
+
+      if (savedExerciseId) {
+        // Check if it's a performance video
+        if (savedCategoryId === 'performance') {
+          return performanceVideos.find(e => e.id === savedExerciseId) || null;
+        }
+        // Check if it's an exercise from the sample workout program (assuming current structure)
+        // This part would need to be more robust if programs are dynamic or fetched
+        if (selectedProgram && selectedProgram.id === sampleWorkoutProgram.id) { // Or more general program lookup
+            for (const workout of sampleWorkoutProgram.workouts) {
+                const exercise = workout.exercises.find(e => e.id === savedExerciseId);
+                if (exercise) return exercise;
+            }
+        }
+      }
+    }
+    return null;
+  });
+
+  const [watchedVideos, setWatchedVideos] = useState<Set<string>>(new Set([]));
+
+  // Load watchedVideos from localStorage (existing logic)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+        try {
+          const saved = localStorage.getItem(WATCHED_VIDEOS_KEY);
+          if (saved) {
+            setWatchedVideos(new Set(JSON.parse(saved)));
+          }
+        } catch (error) {
+          console.error('Error loading watched videos from localStorage:', error);
+        }
     }
   }, []);
-  
-  // Save watched videos to localStorage (client-side only)
+
+  // Save selectedCategory ID to localStorage
   useEffect(() => {
-    try {
-      if (watchedVideos.size > 0) {
-        localStorage.setItem(WATCHED_VIDEOS_KEY, JSON.stringify([...watchedVideos]));
-      }
-    } catch (error) {
-      console.error('Error saving watched videos to localStorage:', error);
+    if (typeof window !== 'undefined') {
+        try {
+            if (selectedCategory) {
+                localStorage.setItem(WORKOUTS_STATE_KEY_CATEGORY, selectedCategory.id);
+            } else {
+                localStorage.removeItem(WORKOUTS_STATE_KEY_CATEGORY);
+            }
+        } catch (error) {
+            console.error('Error saving selected category to localStorage:', error);
+        }
+    }
+  }, [selectedCategory]);
+
+  // Save selectedProgram ID to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+        try {
+            if (selectedProgram) {
+                localStorage.setItem(WORKOUTS_STATE_KEY_PROGRAM, selectedProgram.id);
+            } else {
+                localStorage.removeItem(WORKOUTS_STATE_KEY_PROGRAM);
+            }
+        } catch (error) {
+            console.error('Error saving selected program to localStorage:', error);
+        }
+    }
+  }, [selectedProgram]);
+
+  // Save selectedExercise ID to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+        try {
+            if (selectedExercise) {
+                localStorage.setItem(WORKOUTS_STATE_KEY_EXERCISE, selectedExercise.id);
+            } else {
+                localStorage.removeItem(WORKOUTS_STATE_KEY_EXERCISE);
+            }
+        } catch (error) {
+            console.error('Error saving selected exercise to localStorage:', error);
+        }
+    }
+  }, [selectedExercise]);
+  
+  // Save watchedVideos to localStorage (existing logic)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+        try {
+          // Only save if there are actual watched videos to prevent empty string storage
+          if (watchedVideos.size > 0) { 
+            localStorage.setItem(WATCHED_VIDEOS_KEY, JSON.stringify([...watchedVideos]));
+          } else {
+            // Optional: If you want to clear it when the set is empty
+            localStorage.removeItem(WATCHED_VIDEOS_KEY); 
+          }
+        } catch (error) {
+          console.error('Error saving watched videos to localStorage:', error);
+        }
     }
   }, [watchedVideos]);
 
@@ -270,40 +369,29 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
   };
 
   const handleCategorySelect = (category: Category) => {
-    // Prevent the action if category is locked
     if (category.id !== 'performance' && !isPerformanceComplete()) {
       return;
     }
-    
-    // Don't reselect the same category
     if (selectedCategory?.id === category.id) {
       return;
     }
-    
-    // Immediate state update without animations
     setSelectedCategory(category);
     setSelectedProgram(null);
     setSelectedExercise(null);
   };
 
   const handleProgramSelect = (program: Program) => {
-    // Don't reselect the same program
     if (selectedProgram?.id === program.id) {
       return;
     }
-    
-    // Immediate state update without animations
     setSelectedProgram(program);
     setSelectedExercise(null);
   };
 
   const handleExerciseSelect = (exercise: Exercise) => {
-    // Don't reselect the same exercise
     if (selectedExercise?.id === exercise.id) {
       return;
     }
-    
-    // Immediate state update without animations
     setSelectedExercise(exercise);
   };
 
@@ -314,6 +402,11 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
       setSelectedProgram(null);
     } else if (selectedCategory) {
       setSelectedCategory(null);
+      // When going back from a category, also clear saved program and exercise
+      if (typeof window !== 'undefined') {
+          localStorage.removeItem(WORKOUTS_STATE_KEY_PROGRAM);
+          localStorage.removeItem(WORKOUTS_STATE_KEY_EXERCISE);
+      }
     }
   };
 
@@ -539,10 +632,9 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
     setSelectedCategory(null);
   };
 
-  // Render components without animations and transitions
+  // Render components based on current state
   if (selectedExercise) {
-    // Check if this is one of the performance videos (1-5) for which we need to hide buttons
-    const isPerformanceExercise = ['1', '2', '3', '4', '5'].includes(selectedExercise.id);
+    const isPerformanceExercise = performanceVideos.some(pv => pv.id === selectedExercise.id);
     const nextVideo = isPerformanceExercise ? getNextPerformanceVideo(selectedExercise.id) : null;
     const hasNextVideo = !!nextVideo;
     const isFinalVideo = isPerformanceExercise && isFinalPerformanceVideo(selectedExercise.id);
@@ -553,7 +645,7 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
         onBack={handleBack}
         onChatClick={handleCoachChatClick}
         onComplete={handleVideoComplete}
-        showButtons={!isPerformanceExercise}
+        showButtons={!isPerformanceExercise} 
         isPerformanceVideo={isPerformanceExercise}
         hasNextVideo={hasNextVideo}
         onNextVideo={handleNextVideo}
@@ -564,9 +656,12 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
   }
 
   if (selectedProgram) {
+    // For now, we assume selectedProgram implies sampleWorkoutProgram for simplicity
+    // A more robust solution would fetch or find the program by selectedProgram.id
+    const programToDisplay = (selectedProgram.id === sampleWorkoutProgram.id) ? sampleWorkoutProgram : sampleWorkoutProgram; // Placeholder for actual lookup
     return (
       <WorkoutProgram
-        program={sampleWorkoutProgram}
+        program={programToDisplay} 
         onBack={handleBack}
         onExerciseSelect={handleExerciseSelect}
       />
@@ -577,11 +672,11 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
     if (selectedCategory.id === 'performance') {
       return renderPerformanceVideos();
     }
-
+    const categoryPrograms = programs[selectedCategory.id] || [];
     return (
       <ProgramList
         categoryName={selectedCategory.name}
-        programs={programs[selectedCategory.id]}
+        programs={categoryPrograms}
         onBack={handleBack}
         onProgramSelect={handleProgramSelect}
       />
