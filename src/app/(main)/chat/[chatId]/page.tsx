@@ -1948,14 +1948,42 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
   }, [jumpHistory, handleScrollToMessage]);
 
   // Clear jump history when user sends a new message
-  const sendMessage = useCallback(async (content: string, mediaUrl?: string, mediaType?: string) => {
+  const sendMessage = useCallback(async (content: string, mediaUrl?: string, mediaType?: 'image' | 'video' | 'gif') => {
     if (!user) return;
     
     console.log('[REPLYING] sendMessage called with content:', content, 'replyingTo ID:', replyingTo?.id);
 
+    const tempClientMessageId = `temp-${Date.now()}-${Math.random()}`;
+    const optimisticMessage: Message = {
+      id: tempClientMessageId, 
+      user_id: user.id,
+      content,
+      media_url: mediaUrl,
+      media_type: mediaType,
+      reply_to_message_id: replyingTo?.id,
+      created_at: new Date().toISOString(),
+      status: 'sending',
+      is_read: true, 
+      profiles: currentUserProfile ? { username: currentUserProfile.username, avatar_url: currentUserProfile.avatar_url } : undefined,
+      reply_to: replyingTo ? { 
+          content: replyingTo.content,
+          user_id: replyingTo.user_id,
+          media_url: replyingTo.media_url,
+          media_type: replyingTo.media_type,
+          is_read: true, 
+          profiles: replyingTo.profiles 
+      } : undefined,
+      reactions: []
+    };
+
+    setMessages(prevMessages => 
+        [...prevMessages, optimisticMessage].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    );
+    setReplyingTo(null); // Clear replyingTo state after optimistic update
+
     try {
-      const messageData = {
-        chat_id: params.chatId,
+      const messageDataForDb = {
+        chat_id: params.chatId, // chat_id IS included for DB insert
         user_id: user.id,
         content,
         media_url: mediaUrl,
@@ -1963,17 +1991,46 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
         reply_to_message_id: replyingTo?.id
       };
 
-      const { error } = await supabase.from('messages').insert([messageData]);
+      const { data: insertedMessages, error } = await supabase
+        .from('messages')
+        .insert([messageDataForDb])
+        .select(`
+            *,
+            is_read,
+            profiles:user_id (username, avatar_url),
+            reply_to:reply_to_message_id (
+                content,
+                user_id,
+                media_url,
+                media_type,
+                is_read,
+                profiles:user_id (username, avatar_url)
+            )
+        `);
+
       if (error) throw error;
 
-      // Clear jump history when sending a new message
-      setJumpHistory([]);
-      setReplyingTo(null);
-    } catch (err: any) { // Ensure this err is typed as any
+      const dbMessage = insertedMessages?.[0];
+
+      if (dbMessage) {
+        setMessages(prevMessages =>
+          prevMessages.map(msg => (msg.id === tempClientMessageId ? { ...dbMessage, status: 'sent' } : msg))
+                      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        );
+      } else {
+         setMessages(prevMessages =>
+            prevMessages.map(msg => (msg.id === tempClientMessageId ? { ...msg, status: 'failed' } : msg))
+        );
+      }
+      setJumpHistory([]); // Clear jump history on successful send
+    } catch (err: any) { 
       console.error('Error sending message:', err);
       showToast(err.message || 'Failed to send message', 'error');
+      setMessages(prevMessages =>
+        prevMessages.map(msg => (msg.id === tempClientMessageId ? { ...msg, status: 'failed' } : msg))
+      );
     }
-  }, [user, params.chatId, replyingTo, showToast]);
+  }, [user, params.chatId, replyingTo, showToast, supabase, currentUserProfile]);
 
   // Fetch current user profile
   useEffect(() => {
@@ -3580,135 +3637,108 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.chatId}` },
-        async (payload) => {
-          // ... existing logic for INSERT and UPDATE from postgres_changes ...
-          console.log('[REALTIME_MESSAGE_EVENT] Event type:', payload.eventType, 'Payload:', payload);
+        (payload: any) => { // Use any for payload if type is complex or not fully known for * events
+          console.log('[REALTIME_MESSAGE_EVENT] Event type:', payload.eventType, 'Payload ID:', payload.new?.id || payload.old?.id);
 
           if (payload.eventType === 'INSERT') {
             const newMessagePayload = payload.new as Message;
-            console.log('[REALTIME_MESSAGE] New message INSERT received:', newMessagePayload);
-            
-            if (messages.some(m => m.id === newMessagePayload.id)) {
-               console.log('[REALTIME_MESSAGE] Message already exists, skipping.');
-            return;
-          }
-          
-            // Get the new message with complete reply information
-            const { data: messageData, error: messageError } = await supabase
-              .from('messages')
-              .select(`
-                *,
-                is_read,
-                reply_to:reply_to_message_id (
-                  content,
-                  user_id,
-                  media_url,
-                  media_type,
-                  is_read
-                )
-              `)
-              .eq('id', newMessagePayload.id)
-              .single();
+            console.log('[REALTIME_MESSAGE] Raw INSERT received:', newMessagePayload);
 
-            if (messageError) {
-              console.error('[REALTIME_MESSAGE] Error fetching new message details:', messageError);
-              return;
-            }
+            (async () => {
+              const { data: messageData, error: messageError } = await supabase
+                .from('messages')
+                .select(`
+                  *,
+                  is_read,
+                  profiles:user_id (username, avatar_url),
+                  reply_to:reply_to_message_id (
+                      content,
+                      user_id,
+                      media_url,
+                      media_type,
+                      is_read,
+                      profiles:user_id (username, avatar_url)
+                  )
+                `)
+                .eq('id', newMessagePayload.id)
+                .single();
 
-            if (!messageData) {
-              console.error('[REALTIME_MESSAGE] No message data returned');
-              return;
-            }
+              if (messageError || !messageData) {
+                console.error('[REALTIME_MESSAGE] Error fetching full new message or message not found for ID:', newMessagePayload.id, messageError);
+                return;
+              }
+              
+              const fullMessageToInsert = { ...messageData, reactions: messageData.reactions || [] } as Message;
+              // The profiles should be included from the join now.
 
-            // Starting point for the transformed message
-            let messageToInsert: Message = { 
-              ...messageData, 
-              reactions: messageData.reactions || [] 
-            };
-
-            // Fetch profiles needed for the message
-            const profileIds = new Set<string>();
-            profileIds.add(messageData.user_id); // Main message sender
-            
-            // Add the original message sender if this is a reply
-            if (messageData.reply_to && messageData.reply_to.user_id) {
-              profileIds.add(messageData.reply_to.user_id);
-            }
-            
-            if (profileIds.size > 0) {
-              const { data: profilesData, error: profilesError } = await supabase
-              .from('profiles')
-              .select('id, username, avatar_url')
-                .in('id', Array.from(profileIds));
-                
-              if (profilesError) {
-                console.error('[REALTIME_MESSAGE] Error fetching profiles:', profilesError);
-              } else if (profilesData) {
-                const profilesMap = new Map(profilesData.map(p => [p.id, p]));
-                
-                // Set the main message sender's profile
-                if (messageData.user_id) {
-                  const senderProfile = profilesMap.get(messageData.user_id);
-                  if (senderProfile) {
-                    messageToInsert.profiles = senderProfile;
-                  }
+              setMessages(prevMessages => {
+                if (prevMessages.some(m => m.id === fullMessageToInsert.id)) {
+                  console.log('[REALTIME_MESSAGE] RT: Message ID', fullMessageToInsert.id, 'already exists in state (likely from optimistic update). Skipping addition.');
+                  // Optionally, replace if server version is more complete, but ensure no infinite loops
+                  // For now, just skip if ID exists, assuming optimistic update handled it or will be reconciled.
+                  return prevMessages.map(m => m.id === fullMessageToInsert.id ? fullMessageToInsert : m); // Update if exists to get server truth
                 }
-                
-                // Set the replied-to message sender's profile
-                if (messageToInsert.reply_to && messageToInsert.reply_to.user_id) {
-                  const replyUserProfile = profilesMap.get(messageToInsert.reply_to.user_id);
-                  if (replyUserProfile) {
-                    messageToInsert.reply_to = {
-                      ...messageToInsert.reply_to,
-                      profiles: replyUserProfile
-                    };
-                  }
+                console.log('[REALTIME_MESSAGE] RT: Adding new message ID', fullMessageToInsert.id, 'to state.');
+                return [...prevMessages, fullMessageToInsert].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+              });
+              
+              if (newMessagePayload.user_id !== user?.id) {
+                unreadCountRef.current += 1;
+                if (!firstUnreadIdRef.current) {
+                  firstUnreadIdRef.current = newMessagePayload.id;
+                }
+                setUnreadCount(unreadCountRef.current);
+                if (!firstUnreadId) {
+                   setFirstUnreadId(firstUnreadIdRef.current);
+                }
+                if (!firstUnreadMessageIdForBanner) {
+                  setFirstUnreadMessageIdForBanner(newMessagePayload.id);
                 }
               }
-            }
-
-          setMessages(prevMessages => {
-              const newMessagesArray = [...prevMessages, messageToInsert]
-                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-            return newMessagesArray;
-          });
-
-            // Continue with the existing unread count logic for messages from others
-            if (newMessagePayload.user_id !== user?.id) {
-              unreadCountRef.current += 1;
-              if (!firstUnreadIdRef.current) {
-                firstUnreadIdRef.current = newMessagePayload.id;
-              }
-              setUnreadCount(unreadCountRef.current);
-              if (!firstUnreadId) {
-                 setFirstUnreadId(firstUnreadIdRef.current);
-        }
-              if (!firstUnreadMessageIdForBanner) {
-                setFirstUnreadMessageIdForBanner(newMessagePayload.id);
-              }
-            }
-
+            })();
           } else if (payload.eventType === 'UPDATE') {
-            const updatedMessage = payload.new as Message;
-            console.log('[RT_UPDATE] Received payload.new:', JSON.stringify(updatedMessage, null, 2));
-            console.log('[RT_UPDATE] currentUserProfile on this client:', JSON.stringify(currentUserProfile, null, 2));
+            const updatedMessagePayload = payload.new as Message;
+            console.log('[RT_UPDATE] Raw UPDATE received:', updatedMessagePayload);
 
-            const localUserIsAdmin = currentUserProfile?.is_admin || false;
-            console.log('[RT_UPDATE] Admin status on this client:', localUserIsAdmin);
-            console.log('[RT_UPDATE] updatedMessage.is_hidden value:', updatedMessage.is_hidden);
+            (async () => {
+              const { data: messageData, error: messageError } = await supabase
+                .from('messages')
+                .select(`
+                  *,
+                  is_read,
+                  profiles:user_id (username, avatar_url),
+                  reply_to:reply_to_message_id (
+                      content,
+                      user_id,
+                      media_url,
+                      media_type,
+                      is_read,
+                      profiles:user_id (username, avatar_url)
+                  )
+                `)
+                .eq('id', updatedMessagePayload.id)
+                .single();
 
-            // Note: The RLS policy should prevent non-admins from seeing is_hidden=true in payload.new from postgres_changes.
-            // The custom 'message_hidden' event is the more reliable way to remove it from their UI immediately.
-            // So, this block primarily handles updates for admins, or non-hidden updates for non-admins.
-            setMessages(prevMessages =>
-              prevMessages.map(msg =>
-                msg.id === updatedMessage.id 
-                  ? { ...msg, ...updatedMessage, reactions: msg.reactions || updatedMessage.reactions || [] } 
-                  : msg
-              )
-            );
-            
-            fetchLatestPinnedMessage();
+              if (messageError || !messageData) {
+                console.error('[RT_UPDATE] Error fetching full updated message or message not found for ID:', updatedMessagePayload.id, messageError);
+                return;
+              }
+
+              const fullUpdatedMessage = { ...messageData, reactions: messageData.reactions || [] } as Message;
+
+              setMessages(prevMessages =>
+                prevMessages.map(msg =>
+                  msg.id === fullUpdatedMessage.id 
+                    ? { 
+                        ...fullUpdatedMessage, 
+                        reactions: (msg.reactions?.length || 0) > (fullUpdatedMessage.reactions?.length || 0) ? msg.reactions : fullUpdatedMessage.reactions 
+                      } 
+                    : msg
+                ).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+              );
+              
+              fetchLatestPinnedMessage(); 
+            })();
           }
         }
       )
