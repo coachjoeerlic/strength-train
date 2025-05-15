@@ -1360,15 +1360,17 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
       console.error('[PAGINATION] Error fetching more messages:', err);
       showToast(err.message || 'Failed to load more messages', 'error');
       setHasMore(false);
-    } finally {
-      console.log('[PAGINATION] Finished loading more messages');
-      setLoadingMore(false);
+      // If an error occurs, we should also reset loading state to allow future attempts if appropriate
       isLoadingMoreRef.current = false;
       fetchState.current = 'idle';
-      console.log('[PAGINATION] State transition: updating -> idle');
+      needsScrollAdjustmentRef.current = false; // No adjustment will occur
+    } finally {
+      console.log('[PAGINATION] Finished loading more messages');
+      setLoadingMore(false); // Manages UI spinner, separate from observer lock
+      // isLoadingMoreRef.current and fetchState.current are now reset by the scroll adjustment effect
       console.log('[DEBUG] fetchMoreMessages: messages[0].created_at AFTER fetch and state update (via effect likely needed for accurate value):', messages[0]?.created_at); // This log might not show the updated value immediately due to closure
     }
-  }, [hasMore, loadingMore, oldestCursor, params.chatId, messages, testMode]); // Added messages to dependency array for more accurate logging of messages[0]
+  }, [hasMore, /*loadingMore,*/ oldestCursor, params.chatId, messages, testMode, supabase, processAndStitchReactions, user, showToast]); // Removed loadingMore from deps, added others for completeness
 
   // Modify the intersection observer setup
   useEffect(() => {
@@ -3552,8 +3554,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
     if (needsScrollAdjustmentRef.current && scrollContainerRef.current) {
       const { id: anchorId, offset: anchorOffsetTop } = anchorScrollInfoRef.current;
       const container = scrollContainerRef.current;
-      // Make a local copy of the flag and reset the ref immediately
-      // to prevent the effect from running multiple times for the same adjustment
+      
+      // Reset the flag immediately to indicate adjustment is being handled for this specific update
       needsScrollAdjustmentRef.current = false; 
 
       if (anchorId) {
@@ -3563,7 +3565,7 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           if (newAnchorEl && container) { // Re-check container ref just in case
             const newAnchorOffsetFromScrollParent = newAnchorEl.offsetTop;
             const targetScrollTop = newAnchorOffsetFromScrollParent - anchorOffsetTop;
-            console.log('[ANCHOR_EFFECT] Restoring scroll:', { anchorId, currentScrollTop: container.scrollTop, targetScrollTop });
+            console.log('[ANCHOR_EFFECT] Restoring scroll:', { anchorId, currentScrollTop: container.scrollTop, targetScrollTop, anchorOffsetTop, newAnchorOffsetFromScrollParent });
             // Only adjust if the difference is significant to avoid minor jitter
             if (Math.abs(container.scrollTop - targetScrollTop) > 1) { 
                 container.scrollTop = targetScrollTop;
@@ -3571,16 +3573,29 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
           } else {
              console.warn('[ANCHOR_EFFECT] Anchor element or container not found:', anchorId);
           }
-          // Clear anchor info after attempting adjustment
+          // Clear anchor info and reset loading state *after* attempting adjustment
           anchorScrollInfoRef.current = { id: null, offset: 0 }; 
+          isLoadingMoreRef.current = false;
+          fetchState.current = 'idle';
+          console.log('[ANCHOR_EFFECT] Scroll adjustment finished, loading flags reset.');
         });
       } else {
-          console.log('[ANCHOR_EFFECT] No anchorId found for adjustment.');
-          // Clear anchor info even if no ID was found
+          console.log('[ANCHOR_EFFECT] No anchorId found for adjustment. Resetting loading flags.');
+          // Clear anchor info and reset loading state even if no ID was found
            anchorScrollInfoRef.current = { id: null, offset: 0 };
+           isLoadingMoreRef.current = false;
+           fetchState.current = 'idle';
       }
-
-      // Resetting the flag is now done at the start of the if block.
+    } else if (!needsScrollAdjustmentRef.current && fetchState.current === 'updating' && !isLoadingMoreRef.current) {
+      // If no scroll adjustment was queued, but we were in 'updating' state from a fetch
+      // that didn't need scroll anchoring (e.g. fetchNewerMessages or an empty older fetch),
+      // ensure we return to idle.
+      // This case might need refinement depending on how fetchNewerMessages handles its state.
+      // For now, this specifically handles the case where fetchMoreMessages didn't set an anchor.
+      // fetchState.current = 'idle';
+      // console.log('[ANCHOR_EFFECT] No scroll adjustment needed, ensuring state is idle.');
+      // The above might be too aggressive or not needed if fetchMoreMessages always resets state on error/no-anchor.
+      // The 'else if' condition where anchorId is null handles resetting flags if no anchor was found.
     }
   }, [messages]); // Run this effect whenever messages array changes
 
