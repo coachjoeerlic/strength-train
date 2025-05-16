@@ -61,6 +61,7 @@ export default function ChatsPage() {
       return;
     }
     setLoading(true);
+    console.log(`[ChatsPage] fetchChats (Restored Structure) called for user: ${user.id}, pageNum: ${pageNum}`);
 
     try {
       const { data, error } = await supabase
@@ -69,49 +70,57 @@ export default function ChatsPage() {
           id,
           name,
           last_message_at,
-          chat_participants(
-            user_id
-          ),
-          messages:messages(
-            content,
-            created_at,
-            user_id
-          ),
-          unread_messages:messages!inner(
-            id,
-            is_read,
-            user_id
-          )
+          chat_participants(user_id),
+          messages(content, created_at, user_id, is_read)
         `)
         .order('last_message_at', { ascending: false })
         .range(pageNum * ITEMS_PER_PAGE, (pageNum + 1) * ITEMS_PER_PAGE - 1);
 
-      if (error) throw error;
+      if (error) {
+        console.error('[ChatsPage] Error in Restored fetchChats query:', error);
+        setChats([]);
+        setHasMore(false);
+        throw error;
+      }
 
-      const formattedChats = data.map(chat => {
-        const latestMessage = chat.messages?.sort((a, b) => 
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        )[0] || null;
+      console.log('[ChatsPage] Raw data from Restored fetchChats query:', data);
 
-        const unreadCount = chat.unread_messages?.filter(m => !m.is_read && m.user_id !== user.id).length || 0;
+      if (data) {
+        const formattedChats = data.map(chat => {
+          const sortedMessages = chat.messages?.sort((a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+          const latestMessage = sortedMessages?.[0] || null;
+          
+          const unreadCount = chat.messages?.filter(m => !m.is_read && m.user_id !== user.id).length || 0;
 
-        return {
-          id: chat.id,
-          name: chat.name,
-          last_message_at: chat.last_message_at,
-          last_message: latestMessage,
-          unread_count: unreadCount
-        };
-      });
+          return {
+            id: chat.id,
+            name: chat.name,
+            last_message_at: chat.last_message_at,
+            last_message: latestMessage ? { 
+                content: latestMessage.content,
+                created_at: latestMessage.created_at,
+                user_id: latestMessage.user_id
+            } : null,
+            unread_count: unreadCount
+          };
+        });
+        setChats(prev => pageNum === 0 ? formattedChats : [...prev, ...formattedChats]);
+        setHasMore(formattedChats.length === ITEMS_PER_PAGE);
+      } else {
+        setChats([]);
+        setHasMore(false);
+      }
 
-      setChats(prev => pageNum === 0 ? formattedChats : [...prev, ...formattedChats]);
-      setHasMore(formattedChats.length === ITEMS_PER_PAGE);
-    } catch (error) {
-      console.error('Error fetching chats:', error);
+    } catch (error) { 
+      console.error('Error fetching chats (Restored overall catch):', error);
+      setChats([]);
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, ITEMS_PER_PAGE]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -119,24 +128,55 @@ export default function ChatsPage() {
       return;
     }
     if (user) {
-    fetchChats(0);
+      fetchChats(0);
     }
 
-    const channel = supabase
-      .channel('chat_updates')
+    // Listen for new messages or updates that should refresh the chat list
+    const messagesChannel = supabase
+      .channel('messages_realtime_for_chatlist') // Unique channel name
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'messages' 
-      }, () => {
-        fetchChats(0);
+        // Consider adding a filter if this becomes too noisy, e.g., for messages in user's chats
+      }, (payload) => {
+        console.log('[ChatsPage] New message or message update detected, refetching chats:', payload);
+        fetchChats(0); 
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[ChatsPage] Subscribed to messages_realtime_for_chatlist');
+        }
+      });
+
+    // Listen for changes in chat participation (e.g., new chat created for user, user added/removed)
+    const participantsChannel = supabase
+      .channel('participants_realtime_for_chatlist') // Unique channel name
+      .on('postgres_changes', {
+        event: 'INSERT', // Listen for new participations
+        schema: 'public',
+        table: 'chat_participants'
+        // We might want to filter for efficiency if user is available: filter: `user_id=eq.${user.id}`
+        // However, for a new chat created by a trigger, this user.id might not be available immediately in the filter context
+        // or the insert might be for the other participant (admin). A general refetch on any new participation is safer for now.
+      }, (payload) => {
+        console.log('[ChatsPage] New chat participation detected, refetching chats:', payload);
+        fetchChats(0); 
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[ChatsPage] Subscribed to participants_realtime_for_chatlist');
+        }
+      });
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(messagesChannel).catch(err => console.error('Error removing messagesChannel:', err));
+      supabase.removeChannel(participantsChannel).catch(err => console.error('Error removing participantsChannel:', err));
     };
-  }, [user, router, fetchChats]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, authLoading, router]); // fetchChats is memoized with user, so it's stable if user is stable.
+  // Added authLoading and router as they are used in the effect.
+  // fetchChats itself is stable due to useCallback with [user] dependency.
 
   const loadMore = () => {
     if (!hasMore || loading) return;

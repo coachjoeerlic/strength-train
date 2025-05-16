@@ -445,7 +445,23 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
 
       if (!targetGroupId) {
         console.log('No existing DM group found, creating new one...');
-        const groupName = "Chat with Coach Joe";
+
+        // Fetch the current user's username
+        let username = 'User'; // Default username
+        const { data: userProfile, error: profileError } = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('id', currentUserId)
+          .single();
+
+        if (profileError) {
+          console.error('Error fetching user profile for chat name:', profileError);
+          // Potentially show a toast or use default name
+        } else if (userProfile?.username) {
+          username = userProfile.username;
+        }
+
+        const groupName = `Chat with Coach Joe/${username}`;
         const { data: newGroup, error: createGroupError } = await supabase
           .from('chat_groups')
           .insert({ name: groupName, created_by: currentUserId })
