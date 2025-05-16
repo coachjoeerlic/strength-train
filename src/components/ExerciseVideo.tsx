@@ -78,17 +78,10 @@ export function ExerciseVideo({
       addUiLog('[Effect] Setting live stream to video element');
       liveVideoRef.current.srcObject = mediaStream;
     } else if (liveVideoRef.current) {
-      addUiLog('[Effect] Clearing live stream from video element');
+      addUiLog('[Effect] Clearing live stream from video element (mediaStream is null)');
       liveVideoRef.current.srcObject = null;
     }
-    // Modified cleanup: only stop tracks if camera state is idle or if stream is being replaced
-    // Actual stopping of tracks on cancel/finish is handled by specific functions.
-    return () => {
-      if (cameraState === 'idle' && mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [mediaStream, cameraState]);
+  }, [mediaStream]);
 
   useEffect(() => {
     if (reviewVideoRef.current && videoBlobUrl) {
@@ -104,20 +97,27 @@ export function ExerciseVideo({
   }, [videoBlobUrl]);
 
   const handleOpenFormCamera = async () => {
-    if (!user) return addUiLog('[Camera] User not found');
+    if (cameraState !== 'idle') {
+        addUiLog('[Camera] openFormCamera called when not idle. Current state: ' + cameraState);
+        // Potentially reset or just ignore if already trying to open
+        if (isProcessingVideo) return;
+    }
     addUiLog('[Camera] handleOpenFormCamera: Attempting...');
     setIsProcessingVideo(true);
+    // Ensure any old streams are stopped before getting a new one
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        setMediaStream(null);
+        addUiLog('[Camera] Old stream stopped in openFormCamera');
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user' }, 
-        audio: true 
-      });
-      addUiLog('[Camera] Stream obtained.');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: true });
+      addUiLog('[Camera] New stream obtained.');
       setMediaStream(stream);
       setCameraState('previewing');
     } catch (error: any) {
       addUiLog(`[Camera] Error accessing media: ${error.name} - ${error.message}`);
-      setCameraState('idle');
+      cleanupCameraResources(true); // Full cleanup on error
     } finally {
       setIsProcessingVideo(false);
     }
@@ -126,7 +126,7 @@ export function ExerciseVideo({
   const handleStartRecording = () => {
     if (mediaStream) {
       addUiLog('[Camera] handleStartRecording: Starting...');
-      setRecordedChunks([]);
+      setRecordedChunks([]); 
       const options = { mimeType: 'video/webm; codecs=vp9' };
       let recorder: MediaRecorder | undefined;
       try { recorder = new MediaRecorder(mediaStream, options); addUiLog('[Rec] Using webm/vp9'); }
@@ -134,49 +134,44 @@ export function ExerciseVideo({
         try { recorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' }); addUiLog('[Rec] Using webm'); }
         catch (e2) { recorder = new MediaRecorder(mediaStream); addUiLog('[Rec] Using OS default codec');}
       }
-      
-      if (!recorder) {
-        addUiLog('[Rec] Failed to initialize MediaRecorder.');
-        setCameraState('previewing');
-        return;
-      }
-
+      if (!recorder) { addUiLog('[Rec] Failed to initialize MediaRecorder.'); setCameraState('previewing'); return; }
       setMediaRecorder(recorder);
-      
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          addUiLog(`[Rec] ondataavailable: chunk size ${event.data.size}`);
-          setRecordedChunks((prev) => [...prev, event.data]);
-        } else {
-          addUiLog('[Rec] ondataavailable: chunk size 0');
-        }
+        if (event.data.size > 0) { addUiLog(`[Rec] ondataavailable: chunk size ${event.data.size}`); setRecordedChunks((prev) => [...prev, event.data]); }
+        else { addUiLog('[Rec] ondataavailable: chunk size 0'); }
       };
-
       recorder.onstop = () => {
-        setRecordedChunks(currentChunks => {
-          addUiLog(`[Rec] onstop. Chunks collected (from state): ${currentChunks.length}`);
-          if (currentChunks.length > 0) {
-            const blobMimeType = recorder?.mimeType || 'video/webm';
-            const blob = new Blob(currentChunks, { type: blobMimeType });
-            addUiLog(`[Rec] Blob created. Size: ${blob.size}, Type: ${blob.type}`);
-            setRecordedVideoBlob(blob);
-            const newUrl = URL.createObjectURL(blob);
-            addUiLog(`[Rec] Blob URL: ${newUrl.substring(0,50)}...`);
-            setVideoBlobUrl(newUrl);
-            setCameraState('reviewing');
-          } else {
-            addUiLog('[Rec] No chunks recorded in onstop. Reverting to previewing.');
-            setCameraState('previewing');
-          }
-          
-          mediaStream?.getTracks().forEach(track => track.stop());
-          setMediaStream(null); 
-          return [];
-        });
-      };
+        const currentChunks = recordedChunks; // Capture current value of state for this closure
+        addUiLog(`[Rec] onstop. Chunks collected: ${currentChunks.length}`);
 
-      recorder.start(250);
-      setCameraState('recording');
+        // Stop the live media stream tracks as we are done with them for this recording attempt
+        mediaStream?.getTracks().forEach(track => track.stop());
+        setMediaStream(null); 
+
+        if (currentChunks.length > 0) {
+          const blobMimeType = recorder?.mimeType || 'video/webm'; 
+          const blob = new Blob(currentChunks, { type: blobMimeType });
+          addUiLog(`[Rec] Blob created. Size: ${blob.size}, Type: ${blob.type}`);
+          setRecordedVideoBlob(blob);
+          const newUrl = URL.createObjectURL(blob);
+          addUiLog(`[Rec] Blob URL: ${newUrl.substring(0,50)}...`);
+          setVideoBlobUrl(newUrl);
+          setCameraState('reviewing');
+        } else {
+          addUiLog('[Rec] No chunks recorded in onstop. Triggering retake.');
+          // Don't set state to previewing directly, as stream is now stopped.
+          // Call handleRetakeVideo to re-initiate camera properly.
+          handleRetakeVideo(); 
+        }
+        setRecordedChunks([]); // Clear chunks after processing for next attempt
+      };
+      try {
+        recorder.start(250); 
+        setCameraState('recording');
+      } catch (e: any) {
+        addUiLog(`[Rec] Error starting recorder: ${e.message}`);
+        setCameraState('previewing'); // Fallback to previewing
+      }
     } else { addUiLog('[Camera] StartRec: No mediaStream!'); }
   };
 
@@ -190,9 +185,9 @@ export function ExerciseVideo({
 
   const handleRetakeVideo = () => {
     addUiLog('[Camera] handleRetakeVideo called.');
-    cleanupCameraResources(false); 
-    setCameraState('idle'); // Reset to idle ensure openFormCamera runs fresh
-    handleOpenFormCamera(); 
+    cleanupCameraResources(false); // Clean up resources, but don't set to idle yet
+    // No need to set cameraState to 'idle' here if handleOpenFormCamera is called next and handles it.
+    handleOpenFormCamera(); // This will request a new stream and set state to 'previewing'
   };
 
   const handleSendVideo = async () => {
@@ -278,15 +273,25 @@ export function ExerciseVideo({
 
   const cleanupCameraResources = (isFullCancel: boolean = true) => {
     addUiLog(`[Camera] cleanupCameraResources. Full cancel: ${isFullCancel}`);
-    mediaStream?.getTracks().forEach(track => track.stop());
-    setMediaStream(null);
-    if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        setMediaStream(null); // Crucial to trigger useEffect for liveVideoRef
+    }
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      try { 
+        addUiLog('[Cleanup] Attempting to stop active media recorder.');
+        mediaRecorder.stop(); 
+      } catch (e: any) { addUiLog(`[Cleanup] Error stopping media recorder: ${e.message}`);}
+    }
     setMediaRecorder(null);
     setRecordedChunks([]);
-    if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
-    setVideoBlobUrl(null);
+    if (videoBlobUrl) {
+      URL.revokeObjectURL(videoBlobUrl);
+      setVideoBlobUrl(null);
+    }
     setRecordedVideoBlob(null);
     if (isFullCancel) {
+      addUiLog('[Cleanup] Setting cameraState to idle.');
       setCameraState('idle');
       setIsProcessingVideo(false);
     }
