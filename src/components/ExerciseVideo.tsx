@@ -203,26 +203,14 @@ export function ExerciseVideo({
     addUiLog('[Send] Starting video send process...');
     setIsProcessingVideo(true);
     try {
-      const fileExt = recordedVideoBlob.type.split('/')[1]?.split(';')[0] || 'webm'; // Handle codecs in mime e.g. video/webm;codecs=vp9
-      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
-      addUiLog(`[Send] Uploading as: ${fileName}`);
-      
-      const { error: uploadError } = await supabase.storage
-        .from('chat_media')
-        .upload(fileName, recordedVideoBlob, { contentType: recordedVideoBlob.type, upsert: false });
-
-      if (uploadError) { addUiLog(`[Send] Upload Error: ${uploadError.message}`); throw uploadError; }
-      addUiLog('[Send] Upload successful.');
-
-      const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(fileName);
-      if (!publicUrl) { addUiLog('[Send] Failed to get public URL.'); throw new Error('Failed to get public URL'); }
-      addUiLog(`[Send] Public URL: ${publicUrl.substring(0,50)}...`);
-
-      const COACH_USER_ID = '5db7397a-c516-4d39-ab84-a13bd337d2e6';
+      // Find the one-on-one chat with Coach Joe first to get targetChatId
+      const COACH_USER_ID = '5db7397a-c516-4d39-ab84-a13bd337d2e6'; 
       let targetChatId: string | null = null;
       addUiLog('[Send] Finding DM chat with Coach Joe...');
       const { data: commonChats, error: commonChatsError } = await supabase.from('chat_participants').select('chat_id, user_id').in('user_id', [user.id, COACH_USER_ID]);
-      if (commonChatsError) { addUiLog(`[Send] Error finding chats: ${commonChatsError.message}`); throw commonChatsError; }
+      
+      if (commonChatsError) { addUiLog(`[Send] Error finding common chats: ${commonChatsError.message}`); throw commonChatsError; }
+      
       if (commonChats) {
         const chatCounts = commonChats.reduce((acc, p) => { acc[p.chat_id] = (acc[p.chat_id] || 0) + 1; return acc; }, {} as Record<string,number>);
         for (const chatIdKey in chatCounts) {
@@ -232,19 +220,39 @@ export function ExerciseVideo({
           }
         }
       }
-      if (!targetChatId) { addUiLog('[Send] Coach DM not found!'); throw new Error('Coach DM not found'); }
-      addUiLog(`[Send] Target chat ID: ${targetChatId}`);
 
+      if (!targetChatId) { addUiLog('[Send] Coach DM chat ID not found!'); throw new Error('Coach DM chat ID not found'); }
+      addUiLog(`[Send] Target DM chat ID: ${targetChatId}`);
+
+      const fileExt = recordedVideoBlob.type.split('/')[1]?.split(';')[0] || 'webm';
+      // Standardized path: UPLOADER_USER_ID/TARGET_CHAT_ID/UNIQUE_FILENAME.ext
+      const filePath = `${user.id}/${targetChatId}/${Date.now()}.${fileExt}`;
+      addUiLog(`[Send] Uploading to path: ${filePath}`);
+      
+      const { error: uploadError } = await supabase.storage
+        .from('chat_media') // Ensure this bucket name is correct
+        .upload(filePath, recordedVideoBlob, { contentType: recordedVideoBlob.type, upsert: false });
+
+      if (uploadError) { addUiLog(`[Send] Upload Error: ${uploadError.message}`); throw uploadError; }
+      addUiLog('[Send] Upload successful.');
+
+      const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(filePath);
+      if (!publicUrl) { addUiLog('[Send] Failed to get public URL.'); throw new Error('Failed to get public URL'); }
+      addUiLog(`[Send] Public URL: ${publicUrl.substring(0,50)}...`);
+      
       await supabase.from('messages').insert({
-        chat_id: targetChatId, user_id: user.id, content: `Form check for ${exercise.name}`,
-        media_url: publicUrl, media_type: 'video'
+        chat_id: targetChatId, 
+        user_id: user.id,
+        content: `Form check for ${exercise.name}`,
+        media_url: publicUrl, 
+        media_type: 'video'
       });
       addUiLog('[Send] Message sent to DB.');
 
       onChatClick(); 
       cleanupCameraResources(true);
     } catch (error: any) {
-      addUiLog(`[Send] Error: ${error.message}`);
+      addUiLog(`[Send] Error in send process: ${error.message}`);
     } finally {
       setIsProcessingVideo(false);
     }
