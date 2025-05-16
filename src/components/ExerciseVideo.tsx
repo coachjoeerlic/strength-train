@@ -36,7 +36,7 @@ export function ExerciseVideo({
   // New state variables for custom camera logic
   const [cameraState, setCameraState] = useState<'idle' | 'previewing' | 'recording' | 'reviewing'>('idle');
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [mediaRecorderState, setMediaRecorderState] = useState<MediaRecorder | null>(null);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [recordedVideoBlob, setRecordedVideoBlob] = useState<Blob | null>(null); // Store the actual blob for upload
   const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
@@ -97,10 +97,10 @@ export function ExerciseVideo({
       mediaStream.getTracks().forEach(track => track.stop());
       setMediaStream(null);
     }
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      try { mediaRecorder.stop(); } catch (e) { console.warn('[Camera] Error stopping media recorder during cleanup:', e); }
+    if (mediaRecorderState && mediaRecorderState.state !== 'inactive') {
+      try { mediaRecorderState.stop(); } catch (e) { console.warn('[Camera] Error stopping media recorder during cleanup:', e); }
     }
-    setMediaRecorder(null);
+    setMediaRecorderState(null);
     setRecordedChunks([]);
     if (videoBlobUrl) {
       URL.revokeObjectURL(videoBlobUrl);
@@ -136,14 +136,20 @@ export function ExerciseVideo({
       console.log('[Camera] Starting recording');
       setRecordedChunks([]);
       const options = { mimeType: 'video/webm; codecs=vp9' };
-      let recorder;
-      try { recorder = new MediaRecorder(mediaStream, options); }
+      let recorder: MediaRecorder;
+      try { 
+        recorder = new MediaRecorder(mediaStream, options); 
+      }
       catch (e) {
-        try { recorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' }); }
-        catch (e2) { recorder = new MediaRecorder(mediaStream); }
+        try { 
+          recorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' }); 
+        }
+        catch (e2) { 
+          recorder = new MediaRecorder(mediaStream); 
+        }
       }
       console.log('[Camera] Using mimeType:', recorder.mimeType);
-      setMediaRecorder(recorder);
+      setMediaRecorderState(recorder);
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -153,7 +159,6 @@ export function ExerciseVideo({
 
       recorder.onstop = () => {
         console.log('[Camera] Recording stopped. Chunks collected:', recordedChunks.length);
-        // Make local copy of chunks for blob creation as state update might be async
         const currentChunks = recordedChunks;
         if (currentChunks.length > 0) {
           const blobMimeType = recorder.mimeType || 'video/webm';
@@ -165,9 +170,8 @@ export function ExerciseVideo({
           console.warn('[Camera] No data chunks recorded, returning to previewing state.');
           setCameraState('previewing'); 
         }
-        // Stream is kept open until user explicitly cancels from review or sends.
-        // Or if they retake, it's handled there.
-        // setRecordedChunks([]); // Clear chunks after processing - NO, clear when starting new recording or cancelling fully
+        mediaStream?.getTracks().forEach(track => track.stop());
+        setMediaStream(null);
       };
       recorder.start();
       setCameraState('recording');
@@ -177,9 +181,9 @@ export function ExerciseVideo({
   };
 
   const handleStopRecording = () => {
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
+    if (mediaRecorderState && mediaRecorderState.state === 'recording') {
       console.log('[Camera] Stopping recording via button');
-      mediaRecorder.stop(); 
+      mediaRecorderState.stop(); 
     } else {
       console.warn('[Camera] Stop recording called but no active recorder or not recording.');
     }
