@@ -69,6 +69,7 @@ export function ExerciseVideo({
   // Effect to handle setting the live video stream to the video element
   useEffect(() => {
     if (liveVideoRef.current && mediaStream) {
+      console.log('[Camera Effect] Setting live stream to video element');
       liveVideoRef.current.srcObject = mediaStream;
     } else if (liveVideoRef.current) {
       liveVideoRef.current.srcObject = null; // Clear if stream is null
@@ -83,11 +84,20 @@ export function ExerciseVideo({
   }, [mediaStream, cameraState]);
 
   useEffect(() => {
+    console.log('[Camera Effect] videoBlobUrl changed:', videoBlobUrl);
     if (reviewVideoRef.current && videoBlobUrl) {
+      console.log('[Camera Effect] Setting review video src:', videoBlobUrl);
       reviewVideoRef.current.src = videoBlobUrl;
-      reviewVideoRef.current.load(); // Ensure video loads with new src
+      reviewVideoRef.current.load();
+      reviewVideoRef.current.onloadeddata = () => {
+        console.log('[Camera Effect] Review video loadeddata event triggered.');
+      };
+      reviewVideoRef.current.onerror = (e) => {
+        console.error('[Camera Effect] Review video error:', e, reviewVideoRef.current?.error);
+      };
     } else if (reviewVideoRef.current) {
-      reviewVideoRef.current.src = ''; // Clear src if no blob url
+      console.log('[Camera Effect] Clearing review video src.');
+      reviewVideoRef.current.src = '';
     }
   }, [videoBlobUrl]);
 
@@ -135,6 +145,7 @@ export function ExerciseVideo({
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
+          console.log('[Camera] MediaRecorder data available, chunk size:', event.data.size);
           setRecordedChunks((prev) => [...prev, event.data]);
         }
       };
@@ -145,9 +156,11 @@ export function ExerciseVideo({
           // Use the mimeType from the recorder instance if available, otherwise default
           const blobMimeType = mediaRecorder?.mimeType || 'video/webm';
           const blob = new Blob(recordedChunks, { type: blobMimeType });
+          console.log('[Camera] Video blob created. Size:', blob.size, 'Type:', blob.type);
           setRecordedVideoBlob(blob); // Store the blob
-          console.log('[Camera] Video blob created:', blob, 'URL:', URL.createObjectURL(blob));
-          setVideoBlobUrl(URL.createObjectURL(blob));
+          const newVideoBlobUrl = URL.createObjectURL(blob);
+          console.log('[Camera] New videoBlobUrl generated:', newVideoBlobUrl);
+          setVideoBlobUrl(newVideoBlobUrl);
           setCameraState('reviewing');
         } else {
             console.warn('[Camera] No data chunks recorded, returning to previewing state.');
@@ -161,8 +174,9 @@ export function ExerciseVideo({
         setRecordedChunks([]); // Clear chunks after processing
       };
 
-      recorder.start();
+      recorder.start(1000); // Collect data in 1-second chunks, helps with ondataavailable frequency
       setCameraState('recording');
+      console.log('[Camera] Recording started.');
     } else {
       console.error('[Camera] MediaStream not available to start recording');
     }
@@ -190,6 +204,7 @@ export function ExerciseVideo({
     setMediaRecorder(null);
     setRecordedChunks([]);
     if (videoBlobUrl) {
+      console.log('[Camera] Revoking old videoBlobUrl:', videoBlobUrl);
       URL.revokeObjectURL(videoBlobUrl);
       setVideoBlobUrl(null);
     }
@@ -199,11 +214,13 @@ export function ExerciseVideo({
   };
 
   const handleRetakeVideo = () => {
+    console.log('[Camera] Retake video initiated.');
     handleCancelCamera();
     handleOpenFormCamera(); 
   };
 
   const handleSendVideo = async () => {
+    console.log('[Camera] Send video clicked. Blob exists:', !!recordedVideoBlob);
     if (!user || !recordedVideoBlob) return;
     setIsProcessingVideo(true);
     try {
@@ -355,10 +372,10 @@ export function ExerciseVideo({
         <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4 w-full max-w-xs">
           <button 
             onClick={handleSendVideo}
-            disabled={isProcessingVideo}
-            className="flex-1 p-3 bg-green-500 text-white rounded-lg shadow-lg hover:bg-green-600 disabled:bg-green-300 transition-colors flex items-center justify-center"
+            disabled={isProcessingVideo || !videoBlobUrl}
+            className="flex-1 p-3 bg-green-500 text-white rounded-lg shadow-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
           >
-            {isProcessingVideo ? 'Sending...' : <><Send size={20} className="mr-2"/> Send Video</>}
+            {isProcessingVideo && cameraState === 'reviewing' ? 'Sending...' : <><Send size={20} className="mr-2"/> Send Video</>}
           </button>
           <button 
             onClick={handleRetakeVideo}
@@ -372,9 +389,9 @@ export function ExerciseVideo({
             onClick={handleCancelCamera}
             disabled={isProcessingVideo}
             className="mt-6 p-2 text-gray-300 hover:text-white transition-colors"
-            aria-label="Cancel Review"
+            aria-label="Cancel Review & Exit"
           >
-            Cancel
+            Cancel & Exit
         </button>
       </div>
     );
@@ -476,7 +493,7 @@ export function ExerciseVideo({
             disabled={isProcessingVideo || cameraState !== 'idle'}
             className="flex items-center justify-center px-4 py-3 bg-gradient-to-r from-[#4A7BC7] to-[#5D90DE] text-white rounded-lg hover:from-[#5D90DE] hover:to-[#4A7BC7] transition-all duration-300 border border-white shadow-[0_0_6px_rgba(74,123,199,0.6)]"
           >
-            {isProcessingVideo ? (
+            {isProcessingVideo && cameraState === 'idle' ? (
               <>
                 <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
