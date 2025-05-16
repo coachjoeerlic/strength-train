@@ -128,21 +128,30 @@ export function ExerciseVideo({
       addUiLog('[Camera] handleStartRecording: Starting...');
       setRecordedChunks([]);
       const options = { mimeType: 'video/webm; codecs=vp9' };
-      let recorder;
+      let recorder: MediaRecorder | undefined;
       try { recorder = new MediaRecorder(mediaStream, options); addUiLog('[Rec] Using webm/vp9'); }
       catch (e) {
         try { recorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' }); addUiLog('[Rec] Using webm'); }
         catch (e2) { recorder = new MediaRecorder(mediaStream); addUiLog('[Rec] Using OS default codec');}
       }
+      
+      if (!recorder) {
+        addUiLog('[Rec] Failed to initialize MediaRecorder.');
+        setCameraState('previewing');
+        return;
+      }
+
       setMediaRecorder(recorder);
       recorder.ondataavailable = (event) => { if (event.data.size > 0) setRecordedChunks((prev) => [...prev, event.data]); };
       recorder.onstop = () => {
         addUiLog(`[Rec] onstop. Chunks: ${recordedChunks.length}`);
-        if (recordedChunks.length > 0) {
-          const blobMimeType = recorder.mimeType || 'video/webm';
+        const activeRecorderForStopTime = mediaRecorder;
+
+        if (recordedChunks.length > 0) { 
+          const blobMimeType = activeRecorderForStopTime?.mimeType || 'video/webm';
           const blob = new Blob(recordedChunks, { type: blobMimeType });
           addUiLog(`[Rec] Blob created. Size: ${blob.size}, Type: ${blob.type}`);
-          setRecordedVideoBlob(blob);
+          setRecordedVideoBlob(blob); 
           const newUrl = URL.createObjectURL(blob);
           addUiLog(`[Rec] Blob URL: ${newUrl.substring(0,50)}...`);
           setVideoBlobUrl(newUrl);
