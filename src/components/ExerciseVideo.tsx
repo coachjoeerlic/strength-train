@@ -142,29 +142,40 @@ export function ExerciseVideo({
       }
 
       setMediaRecorder(recorder);
-      recorder.ondataavailable = (event) => { if (event.data.size > 0) setRecordedChunks((prev) => [...prev, event.data]); };
-      recorder.onstop = () => {
-        addUiLog(`[Rec] onstop. Chunks: ${recordedChunks.length}`);
-        const activeRecorderForStopTime = mediaRecorder;
-
-        if (recordedChunks.length > 0) { 
-          const blobMimeType = activeRecorderForStopTime?.mimeType || 'video/webm';
-          const blob = new Blob(recordedChunks, { type: blobMimeType });
-          addUiLog(`[Rec] Blob created. Size: ${blob.size}, Type: ${blob.type}`);
-          setRecordedVideoBlob(blob); 
-          const newUrl = URL.createObjectURL(blob);
-          addUiLog(`[Rec] Blob URL: ${newUrl.substring(0,50)}...`);
-          setVideoBlobUrl(newUrl);
-          setCameraState('reviewing');
+      
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          addUiLog(`[Rec] ondataavailable: chunk size ${event.data.size}`);
+          setRecordedChunks((prev) => [...prev, event.data]);
         } else {
-          addUiLog('[Rec] No chunks recorded. Reverting to previewing.');
-          setCameraState('previewing');
+          addUiLog('[Rec] ondataavailable: chunk size 0');
         }
-        mediaStream?.getTracks().forEach(track => track.stop());
-        setMediaStream(null); 
-        setRecordedChunks([]);
       };
-      recorder.start();
+
+      recorder.onstop = () => {
+        setRecordedChunks(currentChunks => {
+          addUiLog(`[Rec] onstop. Chunks collected (from state): ${currentChunks.length}`);
+          if (currentChunks.length > 0) {
+            const blobMimeType = recorder?.mimeType || 'video/webm';
+            const blob = new Blob(currentChunks, { type: blobMimeType });
+            addUiLog(`[Rec] Blob created. Size: ${blob.size}, Type: ${blob.type}`);
+            setRecordedVideoBlob(blob);
+            const newUrl = URL.createObjectURL(blob);
+            addUiLog(`[Rec] Blob URL: ${newUrl.substring(0,50)}...`);
+            setVideoBlobUrl(newUrl);
+            setCameraState('reviewing');
+          } else {
+            addUiLog('[Rec] No chunks recorded in onstop. Reverting to previewing.');
+            setCameraState('previewing');
+          }
+          
+          mediaStream?.getTracks().forEach(track => track.stop());
+          setMediaStream(null); 
+          return [];
+        });
+      };
+
+      recorder.start(250);
       setCameraState('recording');
     } else { addUiLog('[Camera] StartRec: No mediaStream!'); }
   };
