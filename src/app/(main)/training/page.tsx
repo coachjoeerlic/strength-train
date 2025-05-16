@@ -16,7 +16,8 @@ export default function TrainingPage() {
     setTabState(prev => ({ ...prev, ...newState }));
     
     if (newState.activeTab === 'chat' && newState.chatState?.selectedGroupId) {
-      router.push(`/chat?group=${newState.chatState.selectedGroupId}`);
+      const chatId = newState.chatState.selectedGroupId;
+      router.push(`/chat/${chatId}`);
     }
   };
 

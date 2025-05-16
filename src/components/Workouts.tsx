@@ -12,7 +12,7 @@ interface WorkoutsProps {
   onNavigateToChat: (newState: Partial<TabState>) => void;
 }
 
-const COACH_USER_ID = '195b8756-25ad-4bba-a5d3-553f8049152d';
+const COACH_USER_ID = '5db7397a-c516-4d39-ab84-a13bd337d2e6';
 const WATCHED_VIDEOS_KEY = 'watchedPerformanceVideos';
 const WORKOUTS_STATE_KEY_CATEGORY = 'workoutsSelectedCategoryId';
 const WORKOUTS_STATE_KEY_PROGRAM = 'workoutsSelectedProgramId';
@@ -419,35 +419,45 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
       const currentUserId = user.id;
       let targetGroupId: string | null = null;
 
-      const { data: potentialGroups, error: groupsError } = await supabase
-        .from('chat_groups')
-        .select(`
-          id,
-          members:chat_group_members(user_id)
-        `)
-        .filter('chat_group_members.user_id', 'in', `(${currentUserId},${COACH_USER_ID})`);
+      // Step 1: Try to find an existing 2-person chat between current user and coach
+      const { data: commonChats, error: commonChatsError } = await supabase
+        .from('chat_participants') // Query the participants table
+        .select('chat_id, user_id')
+        .in('user_id', [currentUserId, COACH_USER_ID]);
 
-      if (groupsError) throw groupsError;
+      if (commonChatsError) throw commonChatsError;
 
-      if (potentialGroups) {
-          console.log('Potential DM groups found:', potentialGroups);
-          for (const group of potentialGroups) {
-              if (group.members.length === 2) {
-                  const memberIds = group.members.map((m: { user_id: string }) => m.user_id);
-                  if (memberIds.includes(currentUserId) && memberIds.includes(COACH_USER_ID)) {
-                      targetGroupId = group.id;
-                      console.log('Existing DM group found:', targetGroupId);
-                      break;
-                  }
-              }
+      if (commonChats) {
+        const chatCounts = commonChats.reduce((acc, participant) => {
+          acc[participant.chat_id] = (acc[participant.chat_id] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+
+        for (const chatId in chatCounts) {
+          if (chatCounts[chatId] === 2) { // Found a chat with both users
+            // Verify this chat ONLY has these two participants
+            const { data: allMembers, error: memberCheckError, count: memberCount } = await supabase
+              .from('chat_participants')
+              .select('user_id', { count: 'exact', head: true })
+              .eq('chat_id', chatId);
+
+            if (memberCheckError) {
+              console.error('Error verifying member count for DM:', memberCheckError);
+              continue;
+            }
+            if (memberCount === 2) {
+              targetGroupId = chatId;
+              console.log('Existing DM group found:', targetGroupId);
+              break;
+            }
           }
+        }
       }
 
       if (!targetGroupId) {
         console.log('No existing DM group found, creating new one...');
-
-        // Fetch the current user's username
-        let username = 'User'; // Default username
+        // Fetch the current user's username for the chat name
+        let username = 'User'; 
         const { data: userProfile, error: profileError } = await supabase
           .from('profiles')
           .select('username')
@@ -456,33 +466,35 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
 
         if (profileError) {
           console.error('Error fetching user profile for chat name:', profileError);
-          // Potentially show a toast or use default name
         } else if (userProfile?.username) {
           username = userProfile.username;
         }
 
         const groupName = `Chat with Coach Joe/${username}`;
         const { data: newGroup, error: createGroupError } = await supabase
-          .from('chat_groups')
-          .insert({ name: groupName, created_by: currentUserId })
-          .select()
+          .from('chats') // Use 'chats' table here
+          .insert({ name: groupName, created_by: currentUserId, last_message_at: new Date().toISOString() })
+          .select('id') // Only select id
           .single();
 
         if (createGroupError) throw createGroupError;
-        if (!newGroup) throw new Error('Failed to create new group');
+        if (!newGroup?.id) throw new Error('Failed to create new group or get its ID');
 
         targetGroupId = newGroup.id;
         console.log('New DM group created:', targetGroupId);
 
+        const participantsToInsert = [
+          { chat_id: targetGroupId, user_id: currentUserId },
+          { chat_id: targetGroupId, user_id: COACH_USER_ID },
+        ];
         const { error: addMembersError } = await supabase
-          .from('chat_group_members')
-          .insert([
-            { group_id: targetGroupId, user_id: currentUserId },
-            { group_id: targetGroupId, user_id: COACH_USER_ID },
-          ]);
+          .from('chat_participants') // Use 'chat_participants' table
+          .insert(participantsToInsert);
 
         if (addMembersError) {
-             console.error('Error adding members to new group:', addMembersError);
+          console.error('Error adding members to new group:', addMembersError);
+          // Potentially rollback chat creation or handle error more gracefully
+          throw addMembersError;
         }
       }
 
