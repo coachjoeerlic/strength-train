@@ -97,18 +97,19 @@ export function ExerciseVideo({
   }, [videoBlobUrl]);
 
   const handleOpenFormCamera = async () => {
-    if (cameraState !== 'idle') {
-        addUiLog('[Camera] openFormCamera called when not idle. Current state: ' + cameraState);
-        // Potentially reset or just ignore if already trying to open
-        if (isProcessingVideo) return;
+    if (cameraState !== 'idle' && !isProcessingVideo) {
+        addUiLog('[Camera] openFormCamera called when not idle. Current state: ' + cameraState + '. Resetting.');
+        // Force cleanup and reset before trying to open again if already in a camera active state
+        cleanupCameraResources(true);
+        // Need a brief moment for state to settle before reopening
+        await new Promise(resolve => setTimeout(resolve, 50)); 
     }
     addUiLog('[Camera] handleOpenFormCamera: Attempting...');
     setIsProcessingVideo(true);
-    // Ensure any old streams are stopped before getting a new one
     if (mediaStream) {
+        addUiLog('[Camera] Stopping existing stream in openFormCamera');
         mediaStream.getTracks().forEach(track => track.stop());
-        setMediaStream(null);
-        addUiLog('[Camera] Old stream stopped in openFormCamera');
+        setMediaStream(null); 
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: true });
@@ -117,15 +118,15 @@ export function ExerciseVideo({
       setCameraState('previewing');
     } catch (error: any) {
       addUiLog(`[Camera] Error accessing media: ${error.name} - ${error.message}`);
-      cleanupCameraResources(true); // Full cleanup on error
+      cleanupCameraResources(true); 
     } finally {
       setIsProcessingVideo(false);
     }
   };
 
   const handleStartRecording = () => {
-    if (mediaStream) {
-      addUiLog('[Camera] handleStartRecording: Starting...');
+    if (mediaStream && liveVideoRef.current && liveVideoRef.current.srcObject === mediaStream) {
+      addUiLog('[Rec] Stream is attached. Proceeding to record.');
       setRecordedChunks([]); 
       const options = { mimeType: 'video/webm; codecs=vp9' };
       let recorder: MediaRecorder | undefined;
@@ -135,16 +136,15 @@ export function ExerciseVideo({
         catch (e2) { recorder = new MediaRecorder(mediaStream); addUiLog('[Rec] Using OS default codec');}
       }
       if (!recorder) { addUiLog('[Rec] Failed to initialize MediaRecorder.'); setCameraState('previewing'); return; }
-      setMediaRecorder(recorder);
+      setMediaRecorder(recorder); 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) { addUiLog(`[Rec] ondataavailable: chunk size ${event.data.size}`); setRecordedChunks((prev) => [...prev, event.data]); }
         else { addUiLog('[Rec] ondataavailable: chunk size 0'); }
       };
       recorder.onstop = () => {
-        const currentChunks = recordedChunks; // Capture current value of state for this closure
+        const currentChunks = recordedChunks; // Use component state directly
         addUiLog(`[Rec] onstop. Chunks collected: ${currentChunks.length}`);
 
-        // Stop the live media stream tracks as we are done with them for this recording attempt
         mediaStream?.getTracks().forEach(track => track.stop());
         setMediaStream(null); 
 
@@ -159,20 +159,24 @@ export function ExerciseVideo({
           setCameraState('reviewing');
         } else {
           addUiLog('[Rec] No chunks recorded in onstop. Triggering retake.');
-          // Don't set state to previewing directly, as stream is now stopped.
-          // Call handleRetakeVideo to re-initiate camera properly.
           handleRetakeVideo(); 
         }
-        setRecordedChunks([]); // Clear chunks after processing for next attempt
+        setRecordedChunks([]); 
       };
       try {
         recorder.start(250); 
         setCameraState('recording');
       } catch (e: any) {
         addUiLog(`[Rec] Error starting recorder: ${e.message}`);
-        setCameraState('previewing'); // Fallback to previewing
+        setCameraState('previewing');
       }
-    } else { addUiLog('[Camera] StartRec: No mediaStream!'); }
+    } else {
+      addUiLog('[Rec] Stream not ready or not attached for recording.');
+      if (!mediaStream) addUiLog('[Rec] Abort cause: mediaStream is null');
+      if (!liveVideoRef.current) addUiLog('[Rec] Abort cause: liveVideoRef.current is null');
+      if (liveVideoRef.current && liveVideoRef.current.srcObject !== mediaStream) addUiLog('[Rec] Abort cause: srcObject mismatch');
+      setCameraState('previewing');
+    }
   };
 
   const handleStopRecording = () => { 
@@ -185,9 +189,8 @@ export function ExerciseVideo({
 
   const handleRetakeVideo = () => {
     addUiLog('[Camera] handleRetakeVideo called.');
-    cleanupCameraResources(false); // Clean up resources, but don't set to idle yet
-    // No need to set cameraState to 'idle' here if handleOpenFormCamera is called next and handles it.
-    handleOpenFormCamera(); // This will request a new stream and set state to 'previewing'
+    cleanupCameraResources(false); 
+    handleOpenFormCamera(); 
   };
 
   const handleSendVideo = async () => {
