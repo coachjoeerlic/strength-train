@@ -490,28 +490,35 @@ export default function MessageBubble({
             onPointerLeave={handlePointerUp}
             onPointerMove={handlePointerMove}
             onContextMenu={(e: React.PointerEvent<HTMLDivElement>) => {
-              // Check if it's a mouse right-click (typically e.button === 2 for context menu)
-              // and no other gesture is in progress.
-              // Use e.pointerType for more reliability if available, but e.button is standard for contextmenu.
-              if (e.pointerType === 'mouse' && e.button === 2) {
-                // Prevent default context menu only if we are handling it
+              console.log('[ContextMenu] Event:', {
+                pointerType: e.pointerType,
+                button: e.button,
+                longPressActive: !!longPressTimerRef.current,
+                isSwiping: swipeDetectRef.current.isSwiping,
+                pressStartActive: !!pressStartCoordinatesRef.current
+              });
+
+              // Prioritize button 2 for right-click, and consider undefined pointerType as mouse-like for this case
+              if (e.button === 2 && e.pointerType !== 'touch') { // If it's button 2 and not a touch event
+                console.log('[ContextMenu] Detected desktop-like right-click (button 2, pointerType not touch).');
                 if (!(longPressTimerRef.current || swipeDetectRef.current.isSwiping || pressStartCoordinatesRef.current)) {
+                  console.log('[ContextMenu] No other gestures active, opening superemoji menu.');
                   e.preventDefault();
                   onOpenSuperemojiMenu(message, { x: e.clientX, y: e.clientY });
-                  resetGestureState(); // Reset gestures after opening menu
+                  resetGestureState();
                 } else {
-                  // If another gesture is in progress, still prevent default menu as before
+                  console.log('[ContextMenu] Other gestures active, preventing default but not opening menu.');
                   e.preventDefault();
                 }
-              } else if (e.pointerType !== 'mouse') {
-                // For non-mouse (e.g., touch long press that might trigger context menu),
-                // maintain original logic to prevent default if a custom gesture is active.
+              } else if (e.pointerType === 'touch') {
+                console.log('[ContextMenu] Touch pointerType, checking for active custom gestures to prevent default for potential long-press context menu.');
                 if (longPressTimerRef.current || swipeDetectRef.current.isSwiping || pressStartCoordinatesRef.current) {
-                  e.preventDefault();
+                  e.preventDefault(); // Prevent native context menu if our long press is active
                 }
               }
-              // If it's a mouse event but not button 2 (e.g. left click with ctrl key on mac), let default browser behavior occur unless a custom gesture is active.
+              // Fallback for other scenarios where we might want to prevent default if a custom gesture was active
               else if (longPressTimerRef.current || swipeDetectRef.current.isSwiping || pressStartCoordinatesRef.current) {
+                console.log('[ContextMenu] Fallback: Active custom gesture, preventing default.');
                  e.preventDefault();
               }
             }}
