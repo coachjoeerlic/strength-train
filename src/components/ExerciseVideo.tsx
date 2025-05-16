@@ -41,10 +41,16 @@ export function ExerciseVideo({
   const [recordedVideoBlob, setRecordedVideoBlob] = useState<Blob | null>(null); // Store the actual blob for upload
   const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
   const [isProcessingVideo, setIsProcessingVideo] = useState(false); // For loading states
+  const [uiLogs, setUiLogs] = useState<string[]>([]); // For on-screen debugging
 
   // Refs for video elements
   const liveVideoRef = useRef<HTMLVideoElement>(null);
   const reviewVideoRef = useRef<HTMLVideoElement>(null);
+
+  const addUiLog = (message: string) => {
+    console.log(message); // Keep console logs for desktop debugging
+    setUiLogs(prevLogs => [message, ...prevLogs].slice(0, 10)); // Show last 10 logs
+  };
 
   // Reset videoCompleted state when exercise changes
   useEffect(() => {
@@ -69,10 +75,11 @@ export function ExerciseVideo({
   // Effect to handle setting the live video stream to the video element
   useEffect(() => {
     if (liveVideoRef.current && mediaStream) {
-      console.log('[Camera Effect] Setting live stream to video element');
+      addUiLog('[Effect] Setting live stream to video element');
       liveVideoRef.current.srcObject = mediaStream;
     } else if (liveVideoRef.current) {
-      liveVideoRef.current.srcObject = null; // Clear if stream is null
+      addUiLog('[Effect] Clearing live stream from video element');
+      liveVideoRef.current.srcObject = null;
     }
     // Modified cleanup: only stop tracks if camera state is idle or if stream is being replaced
     // Actual stopping of tracks on cancel/finish is handled by specific functions.
@@ -84,38 +91,32 @@ export function ExerciseVideo({
   }, [mediaStream, cameraState]);
 
   useEffect(() => {
-    console.log('[Camera Effect] videoBlobUrl changed:', videoBlobUrl);
     if (reviewVideoRef.current && videoBlobUrl) {
-      console.log('[Camera Effect] Setting review video src:', videoBlobUrl);
+      addUiLog(`[Effect] Setting review video src: ${videoBlobUrl.substring(0, 50)}...`);
       reviewVideoRef.current.src = videoBlobUrl;
       reviewVideoRef.current.load();
-      reviewVideoRef.current.onloadeddata = () => {
-        console.log('[Camera Effect] Review video loadeddata event triggered.');
-      };
-      reviewVideoRef.current.onerror = (e) => {
-        console.error('[Camera Effect] Review video error:', e, reviewVideoRef.current?.error);
-      };
+      reviewVideoRef.current.onloadeddata = () => addUiLog('[ReviewVid] onloadeddata fired.');
+      reviewVideoRef.current.onerror = (e) => addUiLog(`[ReviewVid] Error: ${JSON.stringify(e)}`);
     } else if (reviewVideoRef.current) {
-      console.log('[Camera Effect] Clearing review video src.');
+      addUiLog('[Effect] Clearing review video src');
       reviewVideoRef.current.src = '';
     }
   }, [videoBlobUrl]);
 
   const handleOpenFormCamera = async () => {
-    if (!user) return;
-    console.log('[Camera] Attempting to open form camera');
+    if (!user) return addUiLog('[Camera] User not found');
+    addUiLog('[Camera] handleOpenFormCamera: Attempting...');
     setIsProcessingVideo(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { facingMode: 'user' }, 
         audio: true 
       });
+      addUiLog('[Camera] Stream obtained.');
       setMediaStream(stream);
       setCameraState('previewing');
-      console.log('[Camera] Stream obtained, state set to previewing');
-    } catch (error) {
-      console.error('Error accessing camera/microphone:', error);
-      // TODO: Add user-facing toast notification for permissions error
+    } catch (error: any) {
+      addUiLog(`[Camera] Error accessing media: ${error.name} - ${error.message}`);
       setCameraState('idle');
     } finally {
       setIsProcessingVideo(false);
@@ -124,137 +125,84 @@ export function ExerciseVideo({
 
   const handleStartRecording = () => {
     if (mediaStream) {
-      console.log('[Camera] Starting recording');
+      addUiLog('[Camera] handleStartRecording: Starting...');
       setRecordedChunks([]);
-      // Determine a preferred MIME type if possible, falling back to default
-      const options = { mimeType: 'video/webm; codecs=vp9' }; // VP9 is widely supported
+      const options = { mimeType: 'video/webm; codecs=vp9' };
       let recorder;
-      try {
-        recorder = new MediaRecorder(mediaStream, options);
-      } catch (e) {
-        console.warn('[Camera] WebM with VP9 not supported, trying default:', e);
-        try {
-            recorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' });
-        } catch (e2) {
-            console.warn('[Camera] WebM (default) not supported, trying OS default:', e2);
-            recorder = new MediaRecorder(mediaStream); // Let the browser pick
-        }
+      try { recorder = new MediaRecorder(mediaStream, options); addUiLog('[Rec] Using webm/vp9'); }
+      catch (e) {
+        try { recorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' }); addUiLog('[Rec] Using webm'); }
+        catch (e2) { recorder = new MediaRecorder(mediaStream); addUiLog('[Rec] Using OS default codec');}
       }
-      console.log('[Camera] Using mimeType:', recorder.mimeType);
       setMediaRecorder(recorder);
-
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          console.log('[Camera] MediaRecorder data available, chunk size:', event.data.size);
-          setRecordedChunks((prev) => [...prev, event.data]);
-        }
-      };
-
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) setRecordedChunks((prev) => [...prev, event.data]); };
       recorder.onstop = () => {
-        console.log('[Camera] Recording stopped. Chunks collected:', recordedChunks.length);
-        if (recordedChunks.length > 0) { // Ensure chunks were actually collected
-          // Use the mimeType from the recorder instance if available, otherwise default
-          const blobMimeType = mediaRecorder?.mimeType || 'video/webm';
+        addUiLog(`[Rec] onstop. Chunks: ${recordedChunks.length}`);
+        if (recordedChunks.length > 0) {
+          const blobMimeType = recorder.mimeType || 'video/webm';
           const blob = new Blob(recordedChunks, { type: blobMimeType });
-          console.log('[Camera] Video blob created. Size:', blob.size, 'Type:', blob.type);
-          setRecordedVideoBlob(blob); // Store the blob
-          const newVideoBlobUrl = URL.createObjectURL(blob);
-          console.log('[Camera] New videoBlobUrl generated:', newVideoBlobUrl);
-          setVideoBlobUrl(newVideoBlobUrl);
+          addUiLog(`[Rec] Blob created. Size: ${blob.size}, Type: ${blob.type}`);
+          setRecordedVideoBlob(blob);
+          const newUrl = URL.createObjectURL(blob);
+          addUiLog(`[Rec] Blob URL: ${newUrl.substring(0,50)}...`);
+          setVideoBlobUrl(newUrl);
           setCameraState('reviewing');
         } else {
-            console.warn('[Camera] No data chunks recorded, returning to previewing state.');
-            setCameraState('previewing'); // Or idle, depending on desired UX
+          addUiLog('[Rec] No chunks recorded. Reverting to previewing.');
+          setCameraState('previewing');
         }
-        // Stop media stream tracks after recording is done and blob is created.
-        if (mediaStream) {
-            mediaStream.getTracks().forEach(track => track.stop());
-            setMediaStream(null);
-        }
-        setRecordedChunks([]); // Clear chunks after processing
+        mediaStream?.getTracks().forEach(track => track.stop());
+        setMediaStream(null); 
+        setRecordedChunks([]);
       };
-
-      recorder.start(1000); // Collect data in 1-second chunks, helps with ondataavailable frequency
+      recorder.start();
       setCameraState('recording');
-      console.log('[Camera] Recording started.');
-    } else {
-      console.error('[Camera] MediaStream not available to start recording');
-    }
+    } else { addUiLog('[Camera] StartRec: No mediaStream!'); }
   };
 
-  const handleStopRecording = () => {
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      console.log('[Camera] Stopping recording via button');
-      mediaRecorder.stop();
-      // onstop handler will manage state transition and stream cleanup
-    } else {
-      console.warn('[Camera] Stop recording called but no active recorder or not recording.');
-    }
+  const handleStopRecording = () => { 
+    addUiLog('[Camera] handleStopRecording called.');
+    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+    else addUiLog('[Camera] StopRec: No active/recording recorder.');
   };
 
-  const handleCancelCamera = () => {
-    console.log('[Camera] Cancelling camera operation');
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(track => track.stop());
-      setMediaStream(null);
-    }
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop(); // Stop recording if active
-    }
-    setMediaRecorder(null);
-    setRecordedChunks([]);
-    if (videoBlobUrl) {
-      console.log('[Camera] Revoking old videoBlobUrl:', videoBlobUrl);
-      URL.revokeObjectURL(videoBlobUrl);
-      setVideoBlobUrl(null);
-    }
-    setRecordedVideoBlob(null);
-    setCameraState('idle');
-    setIsProcessingVideo(false);
-  };
+  const handleCancelCamera = () => { addUiLog('[Camera] Full cancel initiated.'); cleanupCameraResources(true); };
 
   const handleRetakeVideo = () => {
-    console.log('[Camera] Retake video initiated.');
-    handleCancelCamera();
+    addUiLog('[Camera] handleRetakeVideo called.');
+    cleanupCameraResources(false); 
+    setCameraState('idle'); // Reset to idle ensure openFormCamera runs fresh
     handleOpenFormCamera(); 
   };
 
   const handleSendVideo = async () => {
-    console.log('[Camera] Send video clicked. Blob exists:', !!recordedVideoBlob);
-    if (!user || !recordedVideoBlob) return;
+    if (!user || !recordedVideoBlob) {
+      addUiLog('[Send] User or blob missing.');
+      return;
+    }
+    addUiLog('[Send] Starting video send process...');
     setIsProcessingVideo(true);
     try {
-      const fileExt = recordedVideoBlob.type.split('/')[1] || 'webm';
+      const fileExt = recordedVideoBlob.type.split('/')[1]?.split(';')[0] || 'webm'; // Handle codecs in mime e.g. video/webm;codecs=vp9
       const fileName = `${user.id}/${Date.now()}.${fileExt}`;
+      addUiLog(`[Send] Uploading as: ${fileName}`);
       
       const { error: uploadError } = await supabase.storage
         .from('chat_media')
-        .upload(fileName, recordedVideoBlob, { contentType: recordedVideoBlob.type });
+        .upload(fileName, recordedVideoBlob, { contentType: recordedVideoBlob.type, upsert: false });
 
-      if (uploadError) throw uploadError;
+      if (uploadError) { addUiLog(`[Send] Upload Error: ${uploadError.message}`); throw uploadError; }
+      addUiLog('[Send] Upload successful.');
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('chat_media')
-        .getPublicUrl(fileName);
+      const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(fileName);
+      if (!publicUrl) { addUiLog('[Send] Failed to get public URL.'); throw new Error('Failed to get public URL'); }
+      addUiLog(`[Send] Public URL: ${publicUrl.substring(0,50)}...`);
 
-      if (!publicUrl) throw new Error('Failed to get public URL for video.');
-
-      // Find the one-on-one chat with Coach Joe
-      // This logic is similar to handleCoachChatClick in Workouts.tsx
-      // For simplicity, assuming COACH_USER_ID is defined or accessible here
-      // Or, better, this component should already know the target chat ID if it's specific.
-      // For now, let's use the hardcoded COACH_USER_ID for direct DM.
-      const COACH_USER_ID = '5db7397a-c516-4d39-ab84-a13bd337d2e6'; // Ensure this is correct
+      const COACH_USER_ID = '5db7397a-c516-4d39-ab84-a13bd337d2e6';
       let targetChatId: string | null = null;
-
-      // Simplified DM finding logic (could be refactored into a shared utility)
-      const { data: commonChats, error: commonChatsError } = await supabase
-        .from('chat_participants')
-        .select('chat_id, user_id')
-        .in('user_id', [user.id, COACH_USER_ID]);
-
-      if (commonChatsError) throw commonChatsError;
-
+      addUiLog('[Send] Finding DM chat with Coach Joe...');
+      const { data: commonChats, error: commonChatsError } = await supabase.from('chat_participants').select('chat_id, user_id').in('user_id', [user.id, COACH_USER_ID]);
+      if (commonChatsError) { addUiLog(`[Send] Error finding chats: ${commonChatsError.message}`); throw commonChatsError; }
       if (commonChats) {
         const chatCounts = commonChats.reduce((acc, p) => { acc[p.chat_id] = (acc[p.chat_id] || 0) + 1; return acc; }, {} as Record<string,number>);
         for (const chatIdKey in chatCounts) {
@@ -264,30 +212,19 @@ export function ExerciseVideo({
           }
         }
       }
-      
-      if (!targetChatId) {
-        // This case should ideally not happen if the chat is auto-created on sign-up
-        // or handleCoachChatClick in Workouts already established it.
-        // For robustness, could create it here too, but that might duplicate logic.
-        console.error('Coach Joe DM chat not found. Video not sent to specific DM.');
-        // Fallback: Maybe send to a general admin chat or error out?
-        // For now, let's assume onChatClick() navigates somewhere generic if chat not found.
-        throw new Error('Target DM chat with Coach Joe not found.');
-      }
+      if (!targetChatId) { addUiLog('[Send] Coach DM not found!'); throw new Error('Coach DM not found'); }
+      addUiLog(`[Send] Target chat ID: ${targetChatId}`);
 
       await supabase.from('messages').insert({
-        chat_id: targetChatId, 
-        user_id: user.id,
-        content: `Form check for ${exercise.name}`,
-        media_url: publicUrl,
-        media_type: 'video'
+        chat_id: targetChatId, user_id: user.id, content: `Form check for ${exercise.name}`,
+        media_url: publicUrl, media_type: 'video'
       });
+      addUiLog('[Send] Message sent to DB.');
 
-      onChatClick(); // Navigate to chat (as passed by parent)
-      handleCancelCamera(); // Reset everything
-    } catch (error) {
-      console.error('Error sending video:', error);
-      // TODO: Show toast to user
+      onChatClick(); 
+      cleanupCameraResources(true);
+    } catch (error: any) {
+      addUiLog(`[Send] Error: ${error.message}`);
     } finally {
       setIsProcessingVideo(false);
     }
@@ -310,6 +247,29 @@ export function ExerciseVideo({
       onProceedToWorkouts();
     }
   };
+
+  const cleanupCameraResources = (isFullCancel: boolean = true) => {
+    addUiLog(`[Camera] cleanupCameraResources. Full cancel: ${isFullCancel}`);
+    mediaStream?.getTracks().forEach(track => track.stop());
+    setMediaStream(null);
+    if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+    setMediaRecorder(null);
+    setRecordedChunks([]);
+    if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
+    setVideoBlobUrl(null);
+    setRecordedVideoBlob(null);
+    if (isFullCancel) {
+      setCameraState('idle');
+      setIsProcessingVideo(false);
+    }
+  };
+
+  // --- UI LOGS DISPLAY ---
+  const UiLogDisplay = () => (
+    <div style={{position: 'fixed', bottom: '70px', left: '10px', right: '10px', maxHeight: '100px', overflowY: 'scroll', backgroundColor: 'rgba(0,0,0,0.7)', color: 'lightgreen', padding: '5px', zIndex: 100, fontSize: '10px', borderRadius: '5px'}}>
+      {uiLogs.map((log, index) => <div key={index}>{log}</div>)}
+    </div>
+  );
 
   // CONDITIONAL UI FOR CAMERA STATES
   if (cameraState === 'previewing' || cameraState === 'recording') {
@@ -354,6 +314,7 @@ export function ExerciseVideo({
             <XCircle size={28} strokeWidth={2} />
           </button>
         </div>
+        <UiLogDisplay />
       </div>
     );
   }
@@ -372,10 +333,10 @@ export function ExerciseVideo({
         <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4 w-full max-w-xs">
           <button 
             onClick={handleSendVideo}
-            disabled={isProcessingVideo || !videoBlobUrl}
-            className="flex-1 p-3 bg-green-500 text-white rounded-lg shadow-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+            disabled={isProcessingVideo}
+            className="flex-1 p-3 bg-green-500 text-white rounded-lg shadow-lg hover:bg-green-600 disabled:bg-green-300 transition-colors flex items-center justify-center"
           >
-            {isProcessingVideo && cameraState === 'reviewing' ? 'Sending...' : <><Send size={20} className="mr-2"/> Send Video</>}
+            {isProcessingVideo ? 'Sending...' : <><Send size={20} className="mr-2"/> Send Video</>}
           </button>
           <button 
             onClick={handleRetakeVideo}
@@ -389,10 +350,11 @@ export function ExerciseVideo({
             onClick={handleCancelCamera}
             disabled={isProcessingVideo}
             className="mt-6 p-2 text-gray-300 hover:text-white transition-colors"
-            aria-label="Cancel Review & Exit"
+            aria-label="Cancel Review"
           >
-            Cancel & Exit
+            Cancel
         </button>
+        <UiLogDisplay />
       </div>
     );
   }
@@ -493,7 +455,7 @@ export function ExerciseVideo({
             disabled={isProcessingVideo || cameraState !== 'idle'}
             className="flex items-center justify-center px-4 py-3 bg-gradient-to-r from-[#4A7BC7] to-[#5D90DE] text-white rounded-lg hover:from-[#5D90DE] hover:to-[#4A7BC7] transition-all duration-300 border border-white shadow-[0_0_6px_rgba(74,123,199,0.6)]"
           >
-            {isProcessingVideo && cameraState === 'idle' ? (
+            {isProcessingVideo ? (
               <>
                 <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
