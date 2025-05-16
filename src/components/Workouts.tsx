@@ -445,7 +445,7 @@ export function Workouts({ onNavigateToChat }: WorkoutsProps) {
 
       if (!targetGroupId) {
         console.log('No existing DM group found, creating new one...');
-        const groupName = `DM: You / Coach`;
+        const groupName = "Chat with Coach Joe";
         const { data: newGroup, error: createGroupError } = await supabase
           .from('chat_groups')
           .insert({ name: groupName, created_by: currentUserId })

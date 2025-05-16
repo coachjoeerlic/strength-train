@@ -102,7 +102,10 @@ const MessageInput = forwardRef<HTMLInputElement, MessageInputProps>(({ onSend, 
       // Generate a unique file name
       const fileExt = file.name.split('.').pop();
       const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-      const filePath = `${chatId}/${fileName}`;
+      if (!user?.id) {
+        throw new Error('User not authenticated for file upload.');
+      }
+      const filePath = `${user.id}/${chatId}/${fileName}`;
 
       // Upload file to Supabase Storage
       const { error: uploadError, data } = await supabase.storage

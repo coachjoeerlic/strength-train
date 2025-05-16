@@ -77,9 +77,10 @@ export default function ChatsPage() {
             created_at,
             user_id
           ),
-          unread_messages:messages(
+          unread_messages:messages!inner(
             id,
-            is_read
+            is_read,
+            user_id
           )
         `)
         .order('last_message_at', { ascending: false })
@@ -92,7 +93,7 @@ export default function ChatsPage() {
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         )[0] || null;
 
-        const unreadCount = chat.unread_messages?.filter(m => !m.is_read).length || 0;
+        const unreadCount = chat.unread_messages?.filter(m => !m.is_read && m.user_id !== user.id).length || 0;
 
         return {
           id: chat.id,

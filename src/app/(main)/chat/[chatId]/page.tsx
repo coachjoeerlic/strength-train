@@ -3858,6 +3858,8 @@ export default function ChatPage({ params }: { params: { chatId: string } }) {
             emoji = oldRecord.emoji;
             isDelete = true;
             console.log('[REALTIME_REACTION_DEBUG] Event Type: DELETE', { messageId, reactionUserId, emoji, oldRecord });
+            // If RLS is enabled on 'reactions' table, oldRecord might only contain PK (id).
+            // In that case, messageId, reactionUserId, emoji will be undefined here.
           } else if (eventType === 'UPDATE' && newRecord && oldRecord) {
             console.log('[REALTIME_REACTION_DEBUG] Event Type: UPDATE', { newRecord, oldRecord });
             messageId = newRecord.message_id || oldRecord.message_id;

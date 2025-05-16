@@ -3,9 +3,11 @@
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function ChatIconWithBadge() {
   const [unreadCount, setUnreadCount] = useState(0);
+  const { user } = useAuth();
 
   useEffect(() => {
     // Subscribe to unread messages count
@@ -26,16 +28,21 @@ export default function ChatIconWithBadge() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user]);
 
   const fetchUnreadCount = async () => {
-    const { data, error } = await supabase
+    if (!user) {
+      setUnreadCount(0);
+      return;
+    }
+    const { data, error, count } = await supabase
       .from('messages')
-      .select('id', { count: 'exact' })
-      .eq('is_read', false);
+      .select('id', { count: 'exact', head: true })
+      .eq('is_read', false)
+      .neq('user_id', user.id);
 
-    if (!error && data) {
-      setUnreadCount(data.length);
+    if (!error && count !== null) {
+      setUnreadCount(count);
     }
   };
 

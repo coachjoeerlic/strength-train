@@ -489,8 +489,29 @@ export default function MessageBubble({
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             onPointerMove={handlePointerMove}
-            onContextMenu={(e) => {
-              if (longPressTimerRef.current || swipeDetectRef.current.isSwiping || pressStartCoordinatesRef.current) { 
+            onContextMenu={(e: React.PointerEvent<HTMLDivElement>) => {
+              // Check if it's a mouse right-click (typically e.button === 2 for context menu)
+              // and no other gesture is in progress.
+              // Use e.pointerType for more reliability if available, but e.button is standard for contextmenu.
+              if (e.pointerType === 'mouse' && e.button === 2) {
+                // Prevent default context menu only if we are handling it
+                if (!(longPressTimerRef.current || swipeDetectRef.current.isSwiping || pressStartCoordinatesRef.current)) {
+                  e.preventDefault();
+                  onOpenSuperemojiMenu(message, { x: e.clientX, y: e.clientY });
+                  resetGestureState(); // Reset gestures after opening menu
+                } else {
+                  // If another gesture is in progress, still prevent default menu as before
+                  e.preventDefault();
+                }
+              } else if (e.pointerType !== 'mouse') {
+                // For non-mouse (e.g., touch long press that might trigger context menu),
+                // maintain original logic to prevent default if a custom gesture is active.
+                if (longPressTimerRef.current || swipeDetectRef.current.isSwiping || pressStartCoordinatesRef.current) {
+                  e.preventDefault();
+                }
+              }
+              // If it's a mouse event but not button 2 (e.g. left click with ctrl key on mac), let default browser behavior occur unless a custom gesture is active.
+              else if (longPressTimerRef.current || swipeDetectRef.current.isSwiping || pressStartCoordinatesRef.current) {
                  e.preventDefault();
               }
             }}
