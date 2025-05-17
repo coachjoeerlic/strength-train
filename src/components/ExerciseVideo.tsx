@@ -75,15 +75,26 @@ export function ExerciseVideo({
   // Effect to handle setting the live video stream to the video element
   useEffect(() => {
     if (liveVideoRef.current && mediaStream) {
-      addUiLog('[Effect] Setting live stream to video element');
-      liveVideoRef.current.srcObject = mediaStream;
+      addUiLog(`[Effect] mediaStream updated. Active: ${mediaStream.active}. Tracks: ${mediaStream.getTracks().length}`);
+      if (mediaStream.active) {
+        liveVideoRef.current.srcObject = mediaStream;
+        addUiLog(`[Effect] srcObject set. Video dimensions (before metadata): ${liveVideoRef.current.videoWidth}x${liveVideoRef.current.videoHeight}`);
+        liveVideoRef.current.onloadedmetadata = () => {
+          addUiLog(`[Effect] Live video metadata loaded. Dimensions: ${liveVideoRef.current?.videoWidth}x${liveVideoRef.current?.videoHeight}`);
+        };
+        liveVideoRef.current.onerror = (e) => addUiLog(`[Effect LiveVid] Error: ${JSON.stringify(e)}`);
+      } else {
+        addUiLog('[Effect] mediaStream is not active. Not setting srcObject.');
+        liveVideoRef.current.srcObject = null;
+      }
     } else if (liveVideoRef.current) {
-      addUiLog('[Effect] Clearing live stream from video element (mediaStream is null)');
+      addUiLog('[Effect] Clearing live stream (mediaStream is null or no ref)');
       liveVideoRef.current.srcObject = null;
     }
-    return () => { // Cleanup for THIS mediaStream instance when it changes or component unmounts
+
+    return () => {
       if (mediaStream) {
-        addUiLog('[Effect Cleanup] Stopping tracks for previous/current mediaStream');
+        addUiLog(`[Effect Cleanup] Cleaning up stream: ${mediaStream.id}. Active: ${mediaStream.active}`);
         mediaStream.getTracks().forEach(track => track.stop());
       }
     };
@@ -104,17 +115,14 @@ export function ExerciseVideo({
 
   const cleanupCameraResources = (isFullCancel: boolean = true) => {
     addUiLog(`[Camera] cleanupCameraResources. Full cancel: ${isFullCancel}`);
-    // Stream passed to mediaRecorder might be different or same as mediaStream state.
-    // Stop tracks on both if they exist.
     if (mediaRecorder && mediaRecorder.stream && mediaRecorder.stream.active) {
         addUiLog('[Cleanup] Stopping tracks on mediaRecorder.stream');
         mediaRecorder.stream.getTracks().forEach(track => track.stop());
     }
-    if (mediaStream && mediaStream.active) { // Check if stream is active before stopping
-        addUiLog('[Cleanup] Stopping tracks on mediaStream state variable');
-        mediaStream.getTracks().forEach(track => track.stop());
+    if (mediaStream) {
+        addUiLog('[Cleanup] Setting mediaStream state to null to trigger its specific cleanup.');
+        setMediaStream(null);
     }
-    setMediaStream(null); // This will trigger the useEffect cleanup for the old stream if it was the one in state
 
     if (mediaRecorder?.state === 'recording') {
       try { addUiLog('[Cleanup] Attempting to stop active media recorder.'); mediaRecorder.stop(); }
@@ -134,17 +142,20 @@ export function ExerciseVideo({
 
   const handleOpenFormCamera = async () => {
     addUiLog('[Camera] handleOpenFormCamera: Initiated.');
-    if (cameraState !== 'idle' || mediaStream || recordedVideoBlob || isProcessingVideo) {
-        addUiLog(`[Camera] State not idle or resources exist (state: ${cameraState}, stream: ${!!mediaStream}, blob: ${!!recordedVideoBlob}, processing: ${isProcessingVideo}). Performing full cleanup.`);
+    if (cameraState !== 'idle' || isProcessingVideo) { 
+        addUiLog(`[Camera] State not idle or processing (state: ${cameraState}, processing: ${isProcessingVideo}). Performing full cleanup.`);
         cleanupCameraResources(true); 
-        await new Promise(resolve => setTimeout(resolve, 100)); 
+        await new Promise(resolve => setTimeout(resolve, 150)); 
     }
-    if (!user) return addUiLog('[Camera] User not found, aborting open.');
+    if (!user) { addUiLog('[Camera] User not found, aborting open.'); return; }
     addUiLog('[Camera] Proceeding to get user media...');
     setIsProcessingVideo(true); 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: true });
-      addUiLog('[Camera] New stream obtained.');
+      addUiLog(`[Camera] New stream obtained. Active: ${stream.active}. Video tracks: ${stream.getVideoTracks().length}`);
+      if (stream.getVideoTracks().length > 0) {
+        addUiLog(`[Camera] Video track state: ${stream.getVideoTracks()[0].readyState}, muted: ${stream.getVideoTracks()[0].muted}`);
+      }
       setRecordedChunks([]); 
       setMediaStream(stream); 
       setCameraState('previewing');
